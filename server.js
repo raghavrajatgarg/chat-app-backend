@@ -1,22 +1,18 @@
-// server/server.js
 const express = require('express');
-const http = require('http');
+const http = http = require('http');
 const { Server } = require('socket.io');
-const cors = require('cors');
 const mongoose = require('mongoose');
-const Message = require('./models/Message');
+const cors = require('cors');
+const dns = require('dns');
+const checkAuth = require('./middleware/auth');
+const Message = require('./models/Message'); // Make sure your Message model path matches your project structure
+
+dns.setServers(['8.8.8.8', '1.1.1.1']);
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
-// 1. Connect to MongoDB Atlas using YOUR actual connection string
-const MONGO_URI = 'mongodb+srv://raghavscts_db_user:Qeboqy85O0875IdZ@chat-app.aacxagz.mongodb.net/chatapp?retryWrites=true&w=majority&appName=chat-app';
-
-mongoose.connect(MONGO_URI)
-  .then(() => console.log('Successfully connected to MongoDB Atlas!'))
-  .catch((err) => console.error('MongoDB connection error:', err));
-
-// 2. Create HTTP server & attach Socket.io
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -25,38 +21,63 @@ const io = new Server(server, {
   }
 });
 
-// 3. Real-Time Socket Connections
-io.on('connection', async (socket) => {
-  console.log(`User connected: ${socket.id}`);
+const MONGO_URI = process.env.MONGO_URI || "YOUR_MONGODB_ATLAS_CONNECTION_STRING";
 
-  // Fetch and send past 50 messages to the newly connected user
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('Successfully connected to MongoDB Atlas!'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// 1. Health check route for cron-job.org uptime monitor (Returns 200 OK)
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
+// 2. Fetch chat history route (loads all messages ordered oldest to newest)
+app.get('/api/messages', async (req, res) => {
   try {
-    const pastMessages = await Message.find().sort({ createdAt: 1 }).limit(200);
-    socket.emit('load_history', pastMessages);
-  } catch (err) {
-    console.error('Error fetching chat history:', err);
+    const messages = await Message.find().sort({ createdAt: 1 });
+    res.status(200).json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
+});
 
-  // Listen for 'send_message' event from client
+// Protected API Room Route
+app.post('/api/room', checkAuth, async (req, res) => {
+  try {
+    const { uid, email, name } = req.user;
+    const { roomName } = req.body;
+    
+    res.status(200).json({ 
+      message: `Room '${roomName}' successfully created!`, 
+      owner: name || email 
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Socket.io Real-time Connection
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  // Listen for new messages from clients, save to MongoDB, and broadcast
   socket.on('send_message', async (data) => {
     try {
-      // Save message permanently to MongoDB
       const newMessage = new Message(data);
       await newMessage.save();
-
-      // Broadcast saved message to all connected users
-      io.emit('receive_message', data);
-    } catch (err) {
-      console.error('Error saving message to database:', err);
+      io.emit('receive_message', newMessage);
+    } catch (error) {
+      console.error('Error saving message via socket:', error);
     }
   });
 
   socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.id}`);
+    console.log('User disconnected:', socket.id);
   });
 });
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
