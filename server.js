@@ -31,7 +31,7 @@ io.on('connection', async (socket) => {
 
   // Fetch and send past 50 messages to the newly connected user
   try {
-    const pastMessages = await Message.find().sort({ createdAt: 1 }).limit(50);
+    const pastMessages = await Message.find().sort({ createdAt: 1 }).limit(200);
     socket.emit('load_history', pastMessages);
   } catch (err) {
     console.error('Error fetching chat history:', err);
