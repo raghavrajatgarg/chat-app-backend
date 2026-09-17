@@ -14,7 +14,14 @@ const checkAuth = async (req, res, next) => {
     req.user = decodedToken; // Contains uid, email, name
     next();
   } catch (error) {
-    return res.status(401).json({ error: "Unauthorized: Invalid or expired token" });
+    // 🔍 CRITICAL DEBUG LINE: This prints the exact reason to your Render terminal!
+    console.error("❌ FIREBASE VERIFICATION CRASH:", error);
+    
+    return res.status(401).json({ 
+      error: "Unauthorized: Invalid or expired token",
+      debugMessage: error.message, // Temporarily passing this to the frontend alert box
+      debugCode: error.code
+    });
   }
 };
 
