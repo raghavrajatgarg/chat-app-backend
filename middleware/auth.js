@@ -1,4 +1,7 @@
-const admin = require("../firebaseAdmin");
+// 1. Import the specific auth tool directly from the library bundle
+const { getAuth } = require('firebase-admin/auth');
+// Import your existing configured initialization setup
+require('../firebaseAdmin'); 
 
 const checkAuth = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -10,18 +13,13 @@ const checkAuth = async (req, res, next) => {
   const token = authHeader.split(" ")[1];
 
   try {
-    const decodedToken = await admin.auth().verifyIdToken(token);
+    // 2. FIX: Use the dedicated modern token verifier method
+    const decodedToken = await getAuth().verifyIdToken(token);
     req.user = decodedToken; // Contains uid, email, name
     next();
   } catch (error) {
-    // 🔍 CRITICAL DEBUG LINE: This prints the exact reason to your Render terminal!
-    console.error("❌ FIREBASE VERIFICATION CRASH:", error);
-    
-    return res.status(401).json({ 
-      error: "Unauthorized: Invalid or expired token",
-      debugMessage: error.message, // Temporarily passing this to the frontend alert box
-      debugCode: error.code
-    });
+    console.error("❌ ACTUAL FIREBASE VALIDATION FAILURE:", error);
+    return res.status(401).json({ error: "Unauthorized: Invalid or expired token" });
   }
 };
 
