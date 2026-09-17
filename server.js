@@ -6,6 +6,8 @@ const cors = require('cors');
 const dns = require('dns');
 const checkAuth = require('./middleware/auth');
 const Message = require('./models/Message');
+// Tracks live user profiles using their socket connection keys
+const activeUsers = new Map();
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
@@ -64,6 +66,19 @@ app.post('/api/room', checkAuth, async (req, res) => {
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
 
+  // Triggered immediately when a user logs into the frontend interface
+  socket.on('user_connected', (userData) => {
+    if (userData && userData.uid) {
+      activeUsers.set(socket.id, {
+        uid: userData.uid,
+        name: userData.name || userData.email,
+        avatar: userData.avatar
+      });
+      // Broadcast the updated array list to everyone connected
+      io.emit('active_users_list', Array.from(activeUsers.values()));
+    }
+  });
+
   socket.on('send_message', async (data) => {
     try {
       const newMessage = new Message({
@@ -71,7 +86,7 @@ io.on('connection', (socket) => {
         sender: data.sender,
         senderUid: data.senderUid,
         avatar: data.avatar,
-        createdAt: data.createdAt || new Date()
+        createdAt: new Date() // Force fresh timestamp synchronization
       });
       
       const savedMessage = await newMessage.save();
@@ -82,6 +97,11 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    if (activeUsers.has(socket.id)) {
+      activeUsers.delete(socket.id);
+      // Update the active list for remaining users instantly
+      io.emit('active_users_list', Array.from(activeUsers.values()));
+    }
     console.log('User unlinked:', socket.id);
   });
 });
