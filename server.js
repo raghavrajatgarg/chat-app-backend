@@ -22,7 +22,7 @@ const io = new Server(server, {
 });
 
 const MONGO_URI = process.env.MONGO_URI || "YOUR_MONGODB_ATLAS_CONNECTION_STRING";
-// Add this near the top of your server file, right after initializing app = express()
+
 app.get('/ping', (req, res) => {
   res.status(200).send('Server is awake! 🚀');
 });
@@ -30,7 +30,7 @@ app.get('/ping', (req, res) => {
 mongoose.connect(MONGO_URI)
   .then(() => console.log('Successfully connected to MongoDB Atlas!'))
   .catch(err => console.error('MongoDB connection error:', err));
-// Add this line temporarily inside server.js to trace the error in your Render logs:
+
 console.log("🕵️ DIAGNOSTIC: Server is validating tokens using Firebase ID:", process.env.FIREBASE_PROJECT_ID);
 
 app.get('/health', (req, res) => {
@@ -39,7 +39,7 @@ app.get('/health', (req, res) => {
 
 app.get('/api/messages', async (req, res) => {
   try {
-    const messages = await Message.find().sort({ createdAt: 1 });
+    const messages = await Message.find().sort({ createdAt: 1 }).exec();
     res.status(200).json(messages);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -60,21 +60,29 @@ app.post('/api/room', checkAuth, async (req, res) => {
   }
 });
 
+// SINGLE, CLEAN WEBSOCKET CONNECTION BLOCK
 io.on('connection', (socket) => {
-  console.log('A user connected:', socket.id);
+  console.log('📡 Real-time user linked to node:', socket.id);
 
   socket.on('send_message', async (data) => {
     try {
-      const newMessage = new Message(data);
-      await newMessage.save();
-      io.emit('receive_message', newMessage);
+      const newMessage = new Message({
+        text: data.text,
+        sender: data.sender,
+        senderUid: data.senderUid,
+        avatar: data.avatar,
+        createdAt: data.createdAt || new Date()
+      });
+      
+      const savedMessage = await newMessage.save();
+      io.emit('receive_message', savedMessage);
     } catch (error) {
-      console.error('Error saving message via socket:', error);
+      console.error('❌ Data persistence failure on socket stream:', error);
     }
   });
 
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    console.log('User unlinked:', socket.id);
   });
 });
 
