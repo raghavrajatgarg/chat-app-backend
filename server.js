@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const dns = require('dns');
 const checkAuth = require('./middleware/auth');
-const Message = require('./models/Message'); // Make sure your Message model path matches your project structure
+const Message = require('./models/Message');
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
@@ -27,12 +27,10 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log('Successfully connected to MongoDB Atlas!'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// 1. Health check route for cron-job.org uptime monitor (Returns 200 OK)
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
 });
 
-// 2. Fetch chat history route (loads all messages ordered oldest to newest)
 app.get('/api/messages', async (req, res) => {
   try {
     const messages = await Message.find().sort({ createdAt: 1 });
@@ -42,7 +40,6 @@ app.get('/api/messages', async (req, res) => {
   }
 });
 
-// Protected API Room Route
 app.post('/api/room', checkAuth, async (req, res) => {
   try {
     const { uid, email, name } = req.user;
@@ -57,11 +54,9 @@ app.post('/api/room', checkAuth, async (req, res) => {
   }
 });
 
-// Socket.io Real-time Connection
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  // Listen for new messages from clients, save to MongoDB, and broadcast
   socket.on('send_message', async (data) => {
     try {
       const newMessage = new Message(data);
