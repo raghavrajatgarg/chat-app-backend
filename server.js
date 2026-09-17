@@ -30,6 +30,8 @@ app.get('/ping', (req, res) => {
 mongoose.connect(MONGO_URI)
   .then(() => console.log('Successfully connected to MongoDB Atlas!'))
   .catch(err => console.error('MongoDB connection error:', err));
+// Add this line temporarily inside server.js to trace the error in your Render logs:
+console.log("🕵️ DIAGNOSTIC: Server is validating tokens using Firebase ID:", process.env.FIREBASE_PROJECT_ID);
 
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
