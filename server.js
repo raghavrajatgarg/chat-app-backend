@@ -22,6 +22,10 @@ const io = new Server(server, {
 });
 
 const MONGO_URI = process.env.MONGO_URI || "YOUR_MONGODB_ATLAS_CONNECTION_STRING";
+// Add this near the top of your server file, right after initializing app = express()
+app.get('/ping', (req, res) => {
+  res.status(200).send('Server is awake! 🚀');
+});
 
 mongoose.connect(MONGO_URI)
   .then(() => console.log('Successfully connected to MongoDB Atlas!'))
