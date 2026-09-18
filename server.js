@@ -101,18 +101,21 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_room', (room) => {
+    // Leave the old room
     socket.leave(socket.currentRoom);
+    
+    // Join the new room
     socket.join(room);
     socket.currentRoom = room;
     
-    // Update active users map with their new room location
+    // Update active users map
     if (activeUsers.has(socket.id)) {
       const user = activeUsers.get(socket.id);
       user.room = room;
       activeUsers.set(socket.id, user);
     }
 
-    console.log(`User ${socket.id} joined room: ${room}`);
+    console.log(`User ${socket.id} successfully joined room: ${room}`);
     io.emit('active_users_list', Array.from(activeUsers.values()));
   });
 
@@ -152,7 +155,55 @@ io.on('connection', (socket) => {
     console.log('User unlinked:', socket.id);
   });
 });
+// EDIT MESSAGE
+app.put('/api/messages/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text, userId } = req.body;
 
+    const message = await Message.findById(id);
+    if (!message) return res.status(404).json({ error: "Message not found" });
+
+    // Ensure only the author can edit
+    if (message.senderId !== userId) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    message.text = text;
+    message.edited = true; // Optional flag to show "(edited)" tag
+    await message.save();
+
+    // Broadcast update to everyone in the room via Socket.io
+    io.to(message.room).emit('message_updated', message);
+    res.json(message);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// DELETE MESSAGE
+app.delete('/api/messages/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body; // or extract from auth headers
+
+    const message = await Message.findById(id);
+    if (!message) return res.status(404).json({ error: "Message not found" });
+
+    if (message.senderId !== userId) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const room = message.room;
+    await Message.findByIdAndDelete(id);
+
+    // Broadcast deletion to everyone in the room
+    io.to(room).emit('message_deleted', id);
+    res.json({ success: true, id });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
