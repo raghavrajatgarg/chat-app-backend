@@ -100,6 +100,24 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('delete_message', async ({ messageId, userId }) => {
+    try {
+      const message = await Message.findById(messageId);
+      if (!message) return;
+
+      // Ensure only the author can delete
+      if (message.senderUid !== userId) return;
+
+      const room = message.room;
+      await Message.findByIdAndDelete(messageId);
+
+      // Broadcast to everyone in that room (including the sender)
+      io.to(room).emit('message_deleted', messageId);
+    } catch (err) {
+      console.error("Error deleting message via socket:", err);
+    }
+  });
+
   socket.on('join_room', (room) => {
     // Leave the old room
     socket.leave(socket.currentRoom);
@@ -178,24 +196,6 @@ app.put('/api/messages/:id', async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-// DELETE MESSAGE
-socket.on('delete_message', async ({ messageId, userId }) => {
-    try {
-      const message = await Message.findById(messageId);
-      if (!message) return;
-
-      // Ensure only the author can delete
-      if (message.senderUid !== userId) return;
-
-      const room = message.room;
-      await Message.findByIdAndDelete(messageId);
-
-      // Broadcast to everyone in that room (including the sender)
-      io.to(room).emit('message_deleted', messageId);
-    } catch (err) {
-      console.error("Error deleting message via socket:", err);
-    }
-  });
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
