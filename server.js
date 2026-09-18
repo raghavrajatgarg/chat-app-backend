@@ -178,30 +178,24 @@ app.put('/api/messages/:id', async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
 // DELETE MESSAGE
-app.delete('/api/messages/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { userId } = req.body; // or extract from auth headers
+socket.on('delete_message', async ({ messageId, userId }) => {
+    try {
+      const message = await Message.findById(messageId);
+      if (!message) return;
 
-    const message = await Message.findById(id);
-    if (!message) return res.status(404).json({ error: "Message not found" });
+      // Ensure only the author can delete
+      if (message.senderUid !== userId) return;
 
-    if (message.senderId !== userId) {
-      return res.status(403).json({ error: "Unauthorized" });
+      const room = message.room;
+      await Message.findByIdAndDelete(messageId);
+
+      // Broadcast to everyone in that room (including the sender)
+      io.to(room).emit('message_deleted', messageId);
+    } catch (err) {
+      console.error("Error deleting message via socket:", err);
     }
-
-    const room = message.room;
-    await Message.findByIdAndDelete(id);
-
-    // Broadcast deletion to everyone in the room
-    io.to(room).emit('message_deleted', id);
-    res.json({ success: true, id });
-  } catch (err) {
-    res.status(500).json({ error: "Server error" });
-  }
-});
+  });
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
