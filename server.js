@@ -127,14 +127,13 @@ io.on('connection', (socket) => {
   socket.on('typing_stop', ({ room }) => {
     socket.to(room).emit('hide_typing', { room });
   });
-
-  // Unified send_message handler
+// Unified send_message handler
   socket.on('send_message', async (data) => {
     try {
       const newMessage = new Message({
         text: data.text,
         sender: data.sender,
-        senderUid: data.senderUid,
+        senderUid: data.senderUid, // Matches frontend data key
         avatar: data.avatar,
         room: data.room || 'general',
         createdAt: new Date()
@@ -146,7 +145,6 @@ io.on('connection', (socket) => {
       console.error('❌ Data persistence failure on socket stream:', error);
     }
   });
-
   socket.on('disconnect', () => {
     if (activeUsers.has(socket.id)) {
       activeUsers.delete(socket.id);
