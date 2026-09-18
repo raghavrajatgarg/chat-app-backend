@@ -78,18 +78,24 @@ app.get('/api/messages', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-// 2. Clean, single WebSocket connection block with room support
+// 2. Clean, single WebSocket connection block with room support & typing indicators
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
 
   socket.on('user_connected', (userData) => {
     if (userData && userData.uid) {
-      activeUsers.set(socket.id, {
+      // Store user info including current room on the socket object
+      socket.userProfile = {
         uid: userData.uid,
         name: userData.name || userData.email,
         avatar: userData.avatar
-      });
+      };
+      socket.currentRoom = 'general'; // Default starting room
+      socket.join('general');
+
+      activeUsers.set(socket.id, { ...socket.userProfile, room: socket.currentRoom });
+      
+      // Broadcast updated active list to everyone
       io.emit('active_users_list', Array.from(activeUsers.values()));
     }
   });
@@ -98,10 +104,28 @@ io.on('connection', (socket) => {
     socket.leave(socket.currentRoom);
     socket.join(room);
     socket.currentRoom = room;
+    
+    // Update active users map with their new room location
+    if (activeUsers.has(socket.id)) {
+      const user = activeUsers.get(socket.id);
+      user.room = room;
+      activeUsers.set(socket.id, user);
+    }
+
     console.log(`User ${socket.id} joined room: ${room}`);
+    io.emit('active_users_list', Array.from(activeUsers.values()));
   });
 
-  // Single unified send_message handler
+  // 🌟 Typing indicator events
+  socket.on('typing_start', ({ room, userName }) => {
+    socket.to(room).emit('display_typing', { userName, room });
+  });
+
+  socket.on('typing_stop', ({ room }) => {
+    socket.to(room).emit('hide_typing', { room });
+  });
+
+  // Unified send_message handler
   socket.on('send_message', async (data) => {
     try {
       const newMessage = new Message({
@@ -109,13 +133,11 @@ io.on('connection', (socket) => {
         sender: data.sender,
         senderUid: data.senderUid,
         avatar: data.avatar,
-        room: data.room || 'general', // Save the room tag
+        room: data.room || 'general',
         createdAt: new Date()
       });
       
       const savedMessage = await newMessage.save();
-      
-      // Broadcast ONLY to users inside that specific room socket channel
       io.to(savedMessage.room).emit('receive_message', savedMessage);
     } catch (error) {
       console.error('❌ Data persistence failure on socket stream:', error);
