@@ -10,7 +10,9 @@ const Message = require('./models/Message');
 const activeUsers = new Map();
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
-
+const getPrivateRoomId = (uid1, uid2) => {
+  return [uid1, uid2].sort().join('_');
+};
 const app = express();
 app.use(cors());
 app.use(express.json());
