@@ -23,6 +23,22 @@ const io = new Server(server, {
   }
 });
 
+const { getAuth } = require('firebase-admin/auth');
+
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) {
+    return next(new Error("Authentication error: No token provided"));
+  }
+  try {
+    const decodedToken = await getAuth().verifyIdToken(token);
+    socket.user = decodedToken; // Attach verified user info to the socket
+    next();
+  } catch (err) {
+    next(new Error("Authentication error: Invalid token"));
+  }
+});
+
 const MONGO_URI = process.env.MONGO_URI || "YOUR_MONGODB_ATLAS_CONNECTION_STRING";
 
 app.get('/ping', (req, res) => {
@@ -39,15 +55,6 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
 });
 
-app.get('/api/messages', async (req, res) => {
-  try {
-    const messages = await Message.find().sort({ createdAt: 1 }).exec();
-    res.status(200).json(messages);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.post('/api/room', checkAuth, async (req, res) => {
   try {
     const { uid, email, name } = req.user;
@@ -61,12 +68,21 @@ app.post('/api/room', checkAuth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// 1. Update GET route to filter by room
+app.get('/api/messages', async (req, res) => {
+  try {
+    const room = req.query.room || 'general';
+    const messages = await Message.find({ room }).sort({ createdAt: 1 }).exec();
+    res.status(200).json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// SINGLE, CLEAN WEBSOCKET CONNECTION BLOCK
+// 2. Clean, single WebSocket connection block with room support
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
 
-  // Triggered immediately when a user logs into the frontend interface
   socket.on('user_connected', (userData) => {
     if (userData && userData.uid) {
       activeUsers.set(socket.id, {
@@ -74,11 +90,18 @@ io.on('connection', (socket) => {
         name: userData.name || userData.email,
         avatar: userData.avatar
       });
-      // Broadcast the updated array list to everyone connected
       io.emit('active_users_list', Array.from(activeUsers.values()));
     }
   });
 
+  socket.on('join_room', (room) => {
+    socket.leave(socket.currentRoom);
+    socket.join(room);
+    socket.currentRoom = room;
+    console.log(`User ${socket.id} joined room: ${room}`);
+  });
+
+  // Single unified send_message handler
   socket.on('send_message', async (data) => {
     try {
       const newMessage = new Message({
@@ -86,11 +109,14 @@ io.on('connection', (socket) => {
         sender: data.sender,
         senderUid: data.senderUid,
         avatar: data.avatar,
-        createdAt: new Date() // Force fresh timestamp synchronization
+        room: data.room || 'general', // Save the room tag
+        createdAt: new Date()
       });
       
       const savedMessage = await newMessage.save();
-      io.emit('receive_message', savedMessage);
+      
+      // Broadcast ONLY to users inside that specific room socket channel
+      io.to(savedMessage.room).emit('receive_message', savedMessage);
     } catch (error) {
       console.error('❌ Data persistence failure on socket stream:', error);
     }
@@ -99,7 +125,6 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     if (activeUsers.has(socket.id)) {
       activeUsers.delete(socket.id);
-      // Update the active list for remaining users instantly
       io.emit('active_users_list', Array.from(activeUsers.values()));
     }
     console.log('User unlinked:', socket.id);
