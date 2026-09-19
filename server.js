@@ -6,8 +6,16 @@ const cors = require('cors');
 const dns = require('dns');
 const checkAuth = require('./middleware/auth');
 const Message = require('./models/Message');
-
 const activeUsers = new Map();
+const webpush = require('web-push');
+
+// Identify your application securely to global push routing centers
+webpush.setVapidDetails(
+  'mailto:your-email@example.com',
+  process.env.VAPID_PUBLIC_KEY || "YOUR_GENERATED_PUBLIC_KEY_HERE",
+  process.env.VAPID_PRIVATE_KEY || "YOUR_GENERATED_PRIVATE_KEY_HERE"
+);
+
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 const getPrivateRoomId = (uid1, uid2) => {
@@ -89,7 +97,8 @@ io.on('connection', (socket) => {
       socket.userProfile = {
         uid: userData.uid,
         name: userData.name || userData.email,
-        avatar: userData.avatar
+        avatar: userData.avatar,
+        pushSubscription: userData.pushSubscription || null 
       };
       socket.currentRoom = 'general'; 
       socket.join('general');
@@ -161,7 +170,7 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
   });
 
   // 🌟 FIX 3: Capture, save, and broadcast the image string field seamlessly
-  socket.on('send_message', async (data, callback) => {
+   socket.on('send_message', async (data, callback) => {
     try {
       const newMessage = new Message({
         text: data.text,
@@ -169,17 +178,44 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
         senderUid: data.senderUid, 
         avatar: data.avatar,
         room: data.room || 'general',
-        image: data.image || null, // Capture incoming base64 image strings safely
+        image: data.image || null,
         createdAt: new Date()
       });
       
       const savedMessage = await newMessage.save();
       io.to(savedMessage.room).emit('receive_message', savedMessage);
+
+      // 🌟 BACKGROUND PUSH ENGINE DISPATCHER
+      // Find all live sockets belonging to users in this channel room
+      const targets = Array.from(activeUsers.entries());
+      
+      targets.forEach(([socketId, userNode]) => {
+        // Only trigger push if the receiver is not actively viewing the current chat room 
+        // and has a valid mobile push registration token linked!
+        const isUserInDifferentRoom = userNode.room !== savedMessage.room;
+        const isNotTheSender = userNode.uid !== savedMessage.senderUid;
+        
+        if (isUserInDifferentRoom && isNotTheSender && userNode.pushSubscription) {
+          const pushPayload = JSON.stringify({
+            title: `#${savedMessage.room} | ${savedMessage.sender}`,
+            body: savedMessage.text !== "\u200B" ? savedMessage.text : "Sent an image asset 📷",
+            icon: savedMessage.avatar || 'https://placeholder.com',
+            url: `https://your-deployed-app.com` // Update to your live frontend deployment URL
+          });
+
+          // Dispatch directly to Apple/Google system push servers over encrypted payload channels
+          webpush.sendNotification(userNode.pushSubscription, pushPayload)
+            .catch(err => console.log("🔍 Mobile device push dropped (User closed app background thread or revoked token):", err.statusCode));
+        }
+      });
+
       if (typeof callback === 'function') callback({ success: true });
     } catch (error) {
       console.error('❌ Data persistence failure on socket stream:', error);
+      if (typeof callback === 'function') callback({ success: false, error: error.message });
     }
   });
+
 
   socket.on('disconnect', () => {
     if (activeUsers.has(socket.id)) {
