@@ -92,14 +92,19 @@ app.get('/api/messages', async (req, res) => {
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
 
-  socket.on('user_connected', (userData) => {
-    if (userData && userData.uid) {
-      socket.userProfile = {
-        uid: userData.uid,
-        name: userData.name || userData.email,
-        avatar: userData.avatar,
-        pushSubscription: userData.pushSubscription || null 
-      };
+socket.on('user_connected', (userData) => {
+  if (userData && userData.uid) {
+    // 🌟 ADD THIS TEMPORARY PRINT LINE HERE:
+    console.log(`📡 Registration Sync for ${userData.name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
+    
+    socket.userProfile = {
+      uid: userData.uid,
+      name: userData.name || userData.email,
+      avatar: userData.avatar,
+      pushSubscription: userData.pushSubscription || null 
+    };
+    // ... rest of your user link setup code follows ...
+
       socket.currentRoom = 'general'; 
       socket.join('general');
 
