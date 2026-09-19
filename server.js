@@ -111,6 +111,33 @@ io.on('connection', (socket) => {
       console.error("Error deleting message:", err);
     }
   });
+  // 🌟 Drop this block directly inside your active backend io.on('connection') wrapper stream
+socket.on('edit_message', async ({ messageId, text, userId, room }) => {
+  try {
+    const message = await Message.findById(messageId);
+    if (!message) return;
+
+    // Fix the author validation logic block by matching against senderUid safely
+    if (message.senderUid !== userId) {
+      console.log("⚠️ Edit action blocked: User validation keys mismatch.");
+      return;
+    }
+
+    // Update text data values natively in your MongoDB collection layer
+    message.text = text;
+    // Optional parameter: Sets an inline flag true so layout nodes can render an "(edited)" tag indicator
+    message.edited = true; 
+    
+    await message.save();
+
+    // Broadcast the updated message payload back to everyone in the room instantly
+    io.to(room).emit('message_updated', message);
+    
+    console.log(`📝 Message ${messageId} successfully updated via WebSocket pipeline.`);
+  } catch (err) {
+    console.error("❌ Data persistence exception during message edit streaming pass:", err);
+  }
+});
 
   socket.on('join_room', (room) => {
     socket.leave(socket.currentRoom);
