@@ -17,6 +17,7 @@
   "express": "^4.19.2",
   "firebase-admin": "11.11.1", 
   "mongoose": "^8.4.1",
-  "socket.io": "^4.7.5"
+  "socket.io": "^4.7.5",
+  "web-push": "^3.6.7" 
 }
 }
