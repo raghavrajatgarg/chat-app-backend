@@ -175,7 +175,8 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
   });
 
   // 🌟 FIX 3: Capture, save, and broadcast the image string field seamlessly
-   socket.on('send_message', async (data, callback) => {
+     // 🌟 Locate socket.on('send_message', ...) inside your backend server.js file
+  socket.on('send_message', async (data, callback) => {
     try {
       const newMessage = new Message({
         text: data.text,
@@ -190,27 +191,34 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
       const savedMessage = await newMessage.save();
       io.to(savedMessage.room).emit('receive_message', savedMessage);
 
-      // 🌟 BACKGROUND PUSH ENGINE DISPATCHER
-      // Find all live sockets belonging to users in this channel room
+      // 🌟 GOOGLE CLOUD MESSAGING PACKET DISPATCH ROUTER
       const targets = Array.from(activeUsers.entries());
       
       targets.forEach(([socketId, userNode]) => {
-        // Only trigger push if the receiver is not actively viewing the current chat room 
-        // and has a valid mobile push registration token linked!
+        // Only trigger push if the receiver is away in another room and has an active token stored
         const isUserInDifferentRoom = userNode.room !== savedMessage.room;
         const isNotTheSender = userNode.uid !== savedMessage.senderUid;
         
         if (isUserInDifferentRoom && isNotTheSender && userNode.pushSubscription) {
-          const pushPayload = JSON.stringify({
-            title: `#${savedMessage.room} | ${savedMessage.sender}`,
-            body: savedMessage.text !== "\u200B" ? savedMessage.text : "Sent an image asset 📷",
-            icon: savedMessage.avatar || 'https://placeholder.com',
-            url: `https://your-deployed-app.com` // Update to your live frontend deployment URL
-          });
+          
+          // Construct the strict, structured message payload Google requires
+          const fcmPayload = {
+            notification: {
+              title: `#${savedMessage.room} | ${savedMessage.sender}`,
+              body: savedMessage.text !== "\u200B" ? savedMessage.text : "Sent an image asset 📷"
+            },
+            data: {
+              icon: savedMessage.avatar || 'https://placeholder.com',
+              url: 'https://vercel.app' // Your deployment frontend site URL
+            },
+            token: userNode.pushSubscription // The direct, targeted mobile FCM device token string!
+          };
 
-          // Dispatch directly to Apple/Google system push servers over encrypted payload channels
-          webpush.sendNotification(userNode.pushSubscription, pushPayload)
-            .catch(err => console.log("🔍 Mobile device push dropped (User closed app background thread or revoked token):", err.statusCode));
+          // Route the background alert straight through firebase-admin natively
+          const { getMessaging } = require('firebase-admin/messaging');
+          getMessaging().send(fcmPayload)
+            .then((res) => console.log('✅ FCM Background Push dispatched successfully:', res))
+            .catch((err) => console.error('❌ Failed to push to FCM infrastructure network:', err));
         }
       });
 
@@ -220,6 +228,7 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
       if (typeof callback === 'function') callback({ success: false, error: error.message });
     }
   });
+
 
 
   socket.on('disconnect', () => {
