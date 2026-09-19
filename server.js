@@ -134,7 +134,7 @@ io.on('connection', (socket) => {
   });
 
   // 🌟 FIX 3: Capture, save, and broadcast the image string field seamlessly
-  socket.on('send_message', async (data) => {
+  socket.on('send_message', async (data, callback) => {
     try {
       const newMessage = new Message({
         text: data.text,
@@ -148,6 +148,7 @@ io.on('connection', (socket) => {
       
       const savedMessage = await newMessage.save();
       io.to(savedMessage.room).emit('receive_message', savedMessage);
+      if (typeof callback === 'function') callback({ success: true });
     } catch (error) {
       console.error('❌ Data persistence failure on socket stream:', error);
     }
