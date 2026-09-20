@@ -88,11 +88,42 @@ app.get('/api/messages', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await User.find({}).sort({ lastSeen: -1 }).exec();
+    res.status(200).json(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
 
 socket.on('user_connected', (userData) => {
+  socket.on('user_connected', async (userData) => {
+  if (userData && userData.uid) {
+    // Save or update user in MongoDB so they permanently exist in the registry
+    await User.findOneAndUpdate(
+      { uid: userData.uid },
+      { name: userData.name, email: userData.email, avatar: userData.avatar, lastSeen: new Date() },
+      { upsert: true, new: true }
+    );
+
+    socket.userProfile = {
+      uid: userData.uid,
+      name: userData.name || userData.email,
+      avatar: userData.avatar,
+      pushSubscription: userData.pushSubscription || null 
+    };
+
+    socket.currentRoom = 'general'; 
+    socket.join('general');
+
+    activeUsers.set(socket.id, { ...socket.userProfile, room: socket.currentRoom });
+    io.emit('active_users_list', Array.from(activeUsers.values()));
+  }
+});
   if (userData && userData.uid) {
     // 🌟 ADD THIS TEMPORARY PRINT LINE HERE:
     console.log(`📡 Registration Sync for ${userData.name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
