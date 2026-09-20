@@ -1,3 +1,5 @@
+const mongoose = require('mongoose');
+
 const UserSchema = new mongoose.Schema({
   uid: { type: String, required: true, unique: true },
   name: String,
@@ -5,4 +7,5 @@ const UserSchema = new mongoose.Schema({
   avatar: String,
   lastSeen: { type: Date, default: Date.now }
 });
-const User = mongoose.model('User', UserSchema);
+
+module.exports = mongoose.models.User || mongoose.model('User', UserSchema);

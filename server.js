@@ -6,6 +6,7 @@ const cors = require('cors');
 const dns = require('dns');
 const checkAuth = require('./middleware/auth');
 const Message = require('./models/Message');
+const User = require('./models/User')
 const activeUsers = new Map();
 const webpush = require('web-push');
 
@@ -16,7 +17,6 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY || "YOUR_GENERATED_PRIVATE_KEY_HERE"
 );
 
-
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 const getPrivateRoomId = (uid1, uid2) => {
   return [uid1, uid2].sort().join('_');
@@ -25,15 +25,13 @@ const getPrivateRoomId = (uid1, uid2) => {
 const app = express();
 app.use(cors());
 
-// 🌟 FIX 1: Max out incoming body parser JSON limits for Base64 payloads (Set to 10MB)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 const server = http.createServer(app);
 
-// 🌟 FIX 2: Max out WebSockets buffer frame limits to accept large file data arrays
 const io = new Server(server, {
-  maxHttpBufferSize: 1e7, // 10 Megabytes limit frame structural ceiling
+  maxHttpBufferSize: 1e7,
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
@@ -88,6 +86,7 @@ app.get('/api/messages', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
 app.get('/api/users', async (req, res) => {
   try {
     const users = await User.find({}).sort({ lastSeen: -1 }).exec();
@@ -100,41 +99,27 @@ app.get('/api/users', async (req, res) => {
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
 
-socket.on('user_connected', (userData) => {
+  // ✅ Cleaned up single user_connected block with DB sync
   socket.on('user_connected', async (userData) => {
-  if (userData && userData.uid) {
-    // Save or update user in MongoDB so they permanently exist in the registry
-    await User.findOneAndUpdate(
-      { uid: userData.uid },
-      { name: userData.name, email: userData.email, avatar: userData.avatar, lastSeen: new Date() },
-      { upsert: true, new: true }
-    );
+    if (userData && userData.uid) {
+      console.log(`📡 Registration Sync for ${userData.name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
+      
+      try {
+        await User.findOneAndUpdate(
+          { uid: userData.uid },
+          { name: userData.name, email: userData.email, avatar: userData.avatar, lastSeen: new Date() },
+          { upsert: true, new: true }
+        );
+      } catch (dbErr) {
+        console.error("❌ Failed to save user to database:", dbErr);
+      }
 
-    socket.userProfile = {
-      uid: userData.uid,
-      name: userData.name || userData.email,
-      avatar: userData.avatar,
-      pushSubscription: userData.pushSubscription || null 
-    };
-
-    socket.currentRoom = 'general'; 
-    socket.join('general');
-
-    activeUsers.set(socket.id, { ...socket.userProfile, room: socket.currentRoom });
-    io.emit('active_users_list', Array.from(activeUsers.values()));
-  }
-});
-  if (userData && userData.uid) {
-    // 🌟 ADD THIS TEMPORARY PRINT LINE HERE:
-    console.log(`📡 Registration Sync for ${userData.name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
-    
-    socket.userProfile = {
-      uid: userData.uid,
-      name: userData.name || userData.email,
-      avatar: userData.avatar,
-      pushSubscription: userData.pushSubscription || null 
-    };
-    // ... rest of your user link setup code follows ...
+      socket.userProfile = {
+        uid: userData.uid,
+        name: userData.name || userData.email,
+        avatar: userData.avatar,
+        pushSubscription: userData.pushSubscription || null 
+      };
 
       socket.currentRoom = 'general'; 
       socket.join('general');
@@ -156,33 +141,27 @@ socket.on('user_connected', (userData) => {
       console.error("Error deleting message:", err);
     }
   });
-  // 🌟 Drop this block directly inside your active backend io.on('connection') wrapper stream
-socket.on('edit_message', async ({ messageId, text, userId, room }) => {
-  try {
-    const message = await Message.findById(messageId);
-    if (!message) return;
 
-    // Fix the author validation logic block by matching against senderUid safely
-    if (message.senderUid !== userId) {
-      console.log("⚠️ Edit action blocked: User validation keys mismatch.");
-      return;
+  socket.on('edit_message', async ({ messageId, text, userId, room }) => {
+    try {
+      const message = await Message.findById(messageId);
+      if (!message) return;
+
+      if (message.senderUid !== userId) {
+        console.log("⚠️ Edit action blocked: User validation keys mismatch.");
+        return;
+      }
+
+      message.text = text;
+      message.edited = true; 
+      await message.save();
+
+      io.to(room).emit('message_updated', message);
+      console.log(`📝 Message ${messageId} successfully updated via WebSocket pipeline.`);
+    } catch (err) {
+      console.error("❌ Data persistence exception during message edit streaming pass:", err);
     }
-
-    // Update text data values natively in your MongoDB collection layer
-    message.text = text;
-    // Optional parameter: Sets an inline flag true so layout nodes can render an "(edited)" tag indicator
-    message.edited = true; 
-    
-    await message.save();
-
-    // Broadcast the updated message payload back to everyone in the room instantly
-    io.to(room).emit('message_updated', message);
-    
-    console.log(`📝 Message ${messageId} successfully updated via WebSocket pipeline.`);
-  } catch (err) {
-    console.error("❌ Data persistence exception during message edit streaming pass:", err);
-  }
-});
+  });
 
   socket.on('join_room', (room) => {
     socket.leave(socket.currentRoom);
@@ -205,8 +184,6 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
     socket.to(room).emit('hide_typing', { room });
   });
 
-  // 🌟 FIX 3: Capture, save, and broadcast the image string field seamlessly
-     // 🌟 Locate socket.on('send_message', ...) inside your backend server.js file
   socket.on('send_message', async (data, callback) => {
     try {
       const newMessage = new Message({
@@ -221,17 +198,13 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
       
       const savedMessage = await newMessage.save();
       io.emit('receive_message', savedMessage);
-      // 🌟 GOOGLE CLOUD MESSAGING PACKET DISPATCH ROUTER
+
       const targets = Array.from(activeUsers.entries());
-      
       targets.forEach(([socketId, userNode]) => {
-        // Only trigger push if the receiver is away in another room and has an active token stored
         const isUserInDifferentRoom = userNode.room !== savedMessage.room;
         const isNotTheSender = userNode.uid !== savedMessage.senderUid;
         
         if (isUserInDifferentRoom && isNotTheSender && userNode.pushSubscription) {
-          
-          // Construct the strict, structured message payload Google requires
           const fcmPayload = {
             notification: {
               title: `#${savedMessage.room} | ${savedMessage.sender}`,
@@ -239,12 +212,11 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
             },
             data: {
               icon: savedMessage.avatar || 'https://placeholder.com',
-              url: 'https://vercel.app' // Your deployment frontend site URL
+              url: 'https://vercel.app'
             },
-            token: userNode.pushSubscription // The direct, targeted mobile FCM device token string!
+            token: userNode.pushSubscription
           };
 
-          // Route the background alert straight through firebase-admin natively
           const { getMessaging } = require('firebase-admin/messaging');
           getMessaging().send(fcmPayload)
             .then((res) => console.log('✅ FCM Background Push dispatched successfully:', res))
@@ -258,8 +230,6 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
       if (typeof callback === 'function') callback({ success: false, error: error.message });
     }
   });
-
-
 
   socket.on('disconnect', () => {
     if (activeUsers.has(socket.id)) {
