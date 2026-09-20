@@ -189,8 +189,7 @@ socket.on('edit_message', async ({ messageId, text, userId, room }) => {
       });
       
       const savedMessage = await newMessage.save();
-      io.to(savedMessage.room).emit('receive_message', savedMessage);
-
+      io.emit('receive_message', savedMessage);
       // 🌟 GOOGLE CLOUD MESSAGING PACKET DISPATCH ROUTER
       const targets = Array.from(activeUsers.entries());
       
