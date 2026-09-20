@@ -82,8 +82,21 @@ app.post('/api/room', checkAuth, async (req, res) => {
 app.get('/api/messages', async (req, res) => {
   try {
     const room = req.query.room || 'general';
-    const messages = await Message.find({ room }).sort({ createdAt: 1 }).exec();
-    res.status(200).json(messages);
+    const limit = parseInt(req.query.limit) || 30; // Default to loading 30 messages
+    const before = req.query.before; // Optional timestamp for loading older history
+
+    let query = { room };
+    if (before) {
+      query.createdAt = { $lt: new Date(before) }; // Fetch items older than the scroll target
+    }
+
+    // Find messages sorted descending (newest first for batch querying), limit count, then reverse for chronological order
+    const messages = await Message.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .exec();
+
+    res.status(200).json(messages.reverse());
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
