@@ -35,7 +35,9 @@ const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  pingInterval: 5000, // The server pings the client every 10 seconds
+  pingTimeout: 2000,
 });
 
 const { getAuth } = require('firebase-admin/auth');
@@ -231,12 +233,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    if (activeUsers.has(socket.id)) {
-      activeUsers.delete(socket.id);
-      io.emit('active_users_list', Array.from(activeUsers.values()));
-    }
-  });
+socket.on('disconnect', () => {
+  console.log(`🔴 User disconnected: ${socket.id}`);
+  
+  // Check if the user exists in your active users map/array
+  if (activeUsers.has(socket.id)) {
+    // 1. Remove them from the list
+    activeUsers.delete(socket.id);
+    
+    // 2. 🚨 CRITICAL: Broadcast the updated list to EVERYONE immediately
+    io.emit('active_users_list', Array.from(activeUsers.values())); 
+  }
+});
 });
 
 const PORT = process.env.PORT || 5000;
