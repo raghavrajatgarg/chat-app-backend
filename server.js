@@ -298,18 +298,6 @@ io.on('connection', (socket) => {
     socket.to(room).emit('hide_typing', { room });
   });
 
-  socket.on('send_message', async (data, callback) => {
-    try {
-      // 🚀 Rate Limiting Check via Redis (Max 5 messages per 2 seconds)
-      const rateLimitKey = `rate_limit:${data.senderUid}`;
-      const requestCount = await redisClient.incr(rateLimitKey);
-      if (requestCount === 1) {
-        await redisClient.expire(rateLimitKey, 2);
-      }
-      if (requestCount > 5) {
-        if (typeof callback === 'function') callback({ success: false, error: 'You are sending messages too fast. Please slow down.' });
-        return;
-      }
 
       const newMessage = new Message({
         text: data.text,
