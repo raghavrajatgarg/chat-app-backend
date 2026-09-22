@@ -11,13 +11,15 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-"dependencies": {
-  "cors": "^2.8.5",
-  "dns": "^0.2.2",
-  "express": "^4.19.2",
-  "firebase-admin": "11.11.1", 
-  "mongoose": "^8.4.1",
-  "socket.io": "^4.7.5",
-  "web-push": "^3.6.7" 
-}
+  "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "cors": "^2.8.5",
+    "dns": "^0.2.2",
+    "express": "^4.19.2",
+    "firebase-admin": "11.11.1",
+    "mongoose": "^8.4.1",
+    "redis": "^6.2.1",
+    "socket.io": "^4.7.5",
+    "web-push": "^3.6.7"
+  }
 }

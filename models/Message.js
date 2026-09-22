@@ -28,6 +28,10 @@ const messageSchema = new mongoose.Schema({
   image: {
     type: String,
     default: null 
+  },
+  readBy: {
+    type: [String], // Array of user UIDs who have read this message
+    default: []
   }
 });
 

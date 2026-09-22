@@ -4,10 +4,11 @@ const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const dns = require('dns');
+const { createClient } = require('redis');
+const { createAdapter } = require('@socket.io/redis-adapter');
 const checkAuth = require('./middleware/auth');
 const Message = require('./models/Message');
-const User = require('./models/User')
-const activeUsers = new Map();
+const User = require('./models/User');
 const webpush = require('web-push');
 
 // Identify your application securely to global push routing centers
@@ -18,9 +19,6 @@ webpush.setVapidDetails(
 );
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
-const getPrivateRoomId = (uid1, uid2) => {
-  return [uid1, uid2].sort().join('_');
-};
 
 const app = express();
 app.use(cors());
@@ -30,13 +28,22 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 const server = http.createServer(app);
 
+// 1. Initialize Redis Clients for Pub/Sub & Socket.io multi-server routing
+const redisClient = createClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379'
+});
+const subClient = redisClient.duplicate();
+
+redisClient.on('error', (err) => console.error('Redis Client Error', err));
+subClient.on('error', (err) => console.error('Redis Sub Client Error', err));
+
 const io = new Server(server, {
   maxHttpBufferSize: 1e7,
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  pingInterval: 5000, // The server pings the client every 10 seconds
+  pingInterval: 5000,
   pingTimeout: 2000,
 });
 
@@ -62,10 +69,6 @@ app.get('/ping', (req, res) => {
   res.status(200).send('Server is awake! 🚀');
 });
 
-mongoose.connect(MONGO_URI)
-  .then(() => console.log('Successfully connected to MongoDB Atlas!'))
-  .catch(err => console.error('MongoDB connection error:', err));
-
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
 });
@@ -82,15 +85,14 @@ app.post('/api/room', checkAuth, async (req, res) => {
 app.get('/api/messages', async (req, res) => {
   try {
     const room = req.query.room || 'general';
-    const limit = parseInt(req.query.limit) || 30; // Default to loading 30 messages
-    const before = req.query.before; // Optional timestamp for loading older history
+    const limit = parseInt(req.query.limit) || 30;
+    const before = req.query.before;
 
     let query = { room };
     if (before) {
-      query.createdAt = { $lt: new Date(before) }; // Fetch items older than the scroll target
+      query.createdAt = { $lt: new Date(before) };
     }
 
-    // Find messages sorted descending (newest first for batch querying), limit count, then reverse for chronological order
     const messages = await Message.find(query)
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -111,10 +113,32 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+// Helper function to fetch and broadcast current active users from Redis
+async function broadcastActiveUsers() {
+  try {
+    const allUsersObj = await redisClient.hGetAll('active_users');
+    const usersList = Object.values(allUsersObj).map(u => JSON.parse(u));
+    io.emit('active_users_list', usersList);
+  } catch (err) {
+    console.error("❌ Error fetching active users from Redis:", err);
+  }
+}
+
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
 
-  // ✅ Cleaned up single user_connected block with DB sync
+  socket.on('mark_messages_read', async ({ messageIds, userId, room }) => {
+    try {
+      await Message.updateMany(
+        { _id: { $in: messageIds } },
+        { $addToSet: { readBy: userId } }
+      );
+      io.to(room).emit('messages_read_update', { messageIds, userId, room });
+    } catch (err) {
+      console.error("Error updating read receipts:", err);
+    }
+  });
+
   socket.on('user_connected', async (userData) => {
     if (userData && userData.uid) {
       console.log(`📡 Registration Sync for ${userData.name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
@@ -139,8 +163,13 @@ io.on('connection', (socket) => {
       socket.currentRoom = 'general'; 
       socket.join('general');
 
-      activeUsers.set(socket.id, { ...socket.userProfile, room: socket.currentRoom });
-      io.emit('active_users_list', Array.from(activeUsers.values()));
+      // Store active user session in Redis Hash
+      await redisClient.hSet('active_users', socket.id, JSON.stringify({ 
+        ...socket.userProfile, 
+        room: socket.currentRoom 
+      }));
+
+      await broadcastActiveUsers();
     }
   });
 
@@ -162,33 +191,32 @@ io.on('connection', (socket) => {
       const message = await Message.findById(messageId);
       if (!message) return;
 
-      if (message.senderUid !== userId) {
-        console.log("⚠️ Edit action blocked: User validation keys mismatch.");
-        return;
-      }
+      if (message.senderUid !== userId) return;
 
       message.text = text;
       message.edited = true; 
       await message.save();
 
       io.to(room).emit('message_updated', message);
-      console.log(`📝 Message ${messageId} successfully updated via WebSocket pipeline.`);
     } catch (err) {
-      console.error("❌ Data persistence exception during message edit streaming pass:", err);
+      console.error("❌ Error editing message:", err);
     }
   });
 
-  socket.on('join_room', (room) => {
+  socket.on('join_room', async (room) => {
     socket.leave(socket.currentRoom);
     socket.join(room);
     socket.currentRoom = room;
     
-    if (activeUsers.has(socket.id)) {
-      const user = activeUsers.get(socket.id);
+    // Update room placement in Redis active users hash
+    const existingDataStr = await redisClient.hGet('active_users', socket.id);
+    if (existingDataStr) {
+      const user = JSON.parse(existingDataStr);
       user.room = room;
-      activeUsers.set(socket.id, user);
+      await redisClient.hSet('active_users', socket.id, JSON.stringify(user));
     }
-    io.emit('active_users_list', Array.from(activeUsers.values()));
+    
+    await broadcastActiveUsers();
   });
 
   socket.on('typing_start', ({ room, userName }) => {
@@ -201,6 +229,17 @@ io.on('connection', (socket) => {
 
   socket.on('send_message', async (data, callback) => {
     try {
+      // 🚀 Rate Limiting Check via Redis (Max 5 messages per 2 seconds)
+      const rateLimitKey = `rate_limit:${data.senderUid}`;
+      const requestCount = await redisClient.incr(rateLimitKey);
+      if (requestCount === 1) {
+        await redisClient.expire(rateLimitKey, 2);
+      }
+      if (requestCount > 5) {
+        if (typeof callback === 'function') callback({ success: false, error: 'You are sending messages too fast. Please slow down.' });
+        return;
+      }
+
       const newMessage = new Message({
         text: data.text,
         sender: data.sender,
@@ -214,8 +253,11 @@ io.on('connection', (socket) => {
       const savedMessage = await newMessage.save();
       io.emit('receive_message', savedMessage);
 
-      const targets = Array.from(activeUsers.entries());
-      targets.forEach(([socketId, userNode]) => {
+      // Handle FCM background push notifications
+      const allUsersObj = await redisClient.hGetAll('active_users');
+      const targets = Object.values(allUsersObj).map(u => JSON.parse(u));
+
+      targets.forEach((userNode) => {
         const isUserInDifferentRoom = userNode.room !== savedMessage.room;
         const isNotTheSender = userNode.uid !== savedMessage.senderUid;
         
@@ -233,34 +275,45 @@ io.on('connection', (socket) => {
           };
 
           const { getMessaging } = require('firebase-admin/messaging');
-          getMessaging().send(fcmPayload)
-            .then((res) => console.log('✅ FCM Background Push dispatched successfully:', res))
-            .catch((err) => console.error('❌ Failed to push to FCM infrastructure network:', err));
+          getMessaging().send(fcmPayload).catch((err) => console.error('❌ FCM push error:', err));
         }
       });
 
       if (typeof callback === 'function') callback({ success: true });
     } catch (error) {
-      console.error('❌ Data persistence failure on socket stream:', error);
+      console.error('❌ Error sending message:', error);
       if (typeof callback === 'function') callback({ success: false, error: error.message });
     }
   });
 
-socket.on('disconnect', () => {
-  console.log(`🔴 User disconnected: ${socket.id}`);
-  
-  // Check if the user exists in your active users map/array
-  if (activeUsers.has(socket.id)) {
-    // 1. Remove them from the list
-    activeUsers.delete(socket.id);
-    
-    // 2. 🚨 CRITICAL: Broadcast the updated list to EVERYONE immediately
-    io.emit('active_users_list', Array.from(activeUsers.values())); 
-  }
-});
+  socket.on('disconnect', async () => {
+    console.log(`🔴 User disconnected: ${socket.id}`);
+    await redisClient.hDel('active_users', socket.id);
+    await broadcastActiveUsers();
+  });
 });
 
+// Startup sequence connecting Redis, MongoDB, and HTTP Server
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+
+async function startServer() {
+  try {
+    await Promise.all([
+      redisClient.connect(),
+      subClient.connect(),
+      mongoose.connect(MONGO_URI)
+    ]);
+    console.log('Successfully connected to Redis & MongoDB Atlas!');
+
+    // Attach Socket.io Redis adapter for cross-instance coordination
+    io.adapter(createAdapter(redisClient, subClient));
+
+    server.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error('Failed to start server components:', err);
+  }
+}
+
+startServer();
