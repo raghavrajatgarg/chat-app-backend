@@ -62,9 +62,22 @@ io.use(async (socket, next) => {
     next(new Error("Authentication error: Invalid token"));
   }
 });
-
+// Add this new endpoint to fetch replies for a specific parent message
+app.get('/api/messages/thread', async (req, res) => {
+  try {
+    const { parentId } = req.query;
+    if (!parentId) {
+      return res.status(400).json({ error: 'parentId parameter is required' });
+    }
+    const replies = await Message.find({ parentId }).sort({ createdAt: 1 });
+    res.json(replies);
+  } catch (err) {
+    console.error('[SERVER ERROR] Failed to fetch thread replies:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 // GET search messages across the whole history of a room
-app.get('/search', async (req, res) => {
+app.get('/api/messages/search', async (req, res) => {
   try {
     const { room, query } = req.query;
     
@@ -152,6 +165,38 @@ async function broadcastActiveUsers() {
 
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
+  socket.on('send_message', async (data, callback) => {
+    try {
+      const rateLimitKey = `rate_limit:${data.senderUid}`;
+      const requestCount = await redisClient.incr(rateLimitKey);
+      if (requestCount === 1) await redisClient.expire(rateLimitKey, 2);
+      if (requestCount > 5) {
+        if (typeof callback === 'function') callback({ success: false, error: 'You are sending messages too fast.' });
+        return;
+      }
+
+      const newMessage = new Message({
+        text: data.text,
+        sender: data.sender,
+        senderUid: data.senderUid, 
+        avatar: data.avatar,
+        room: data.room || 'general',
+        parentId: data.parentId || null, // ✨ Support for threads
+        image: data.image || null,
+        createdAt: new Date()
+      });
+      
+      const savedMessage = await newMessage.save();
+      
+      // Broadcast to everyone in the room (main feed or thread handles filtering client-side)
+      io.emit('receive_message', savedMessage);
+
+      if (typeof callback === 'function') callback({ success: true });
+    } catch (error) {
+      console.error('❌ Error sending message:', error);
+      if (typeof callback === 'function') callback({ success: false, error: error.message });
+    }
+  });
 
   socket.on('mark_messages_read', async ({ messageIds, userId, room }) => {
     try {

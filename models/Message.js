@@ -1,10 +1,17 @@
+// models/Message.js
 const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema({
   room: { 
     type: String, 
     required: true, 
-    index: true // Indexed for fast querying when switching rooms 
+    index: true 
+  },
+  parentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Message',
+    default: null,
+    index: true
   },
   senderUid: { 
     type: String, 
@@ -30,7 +37,7 @@ const messageSchema = new mongoose.Schema({
     default: null 
   },
   readBy: {
-    type: [String], // Array of user UIDs who have read this message
+    type: [String],
     default: []
   }
 });
