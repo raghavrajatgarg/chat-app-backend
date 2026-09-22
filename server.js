@@ -84,18 +84,17 @@ app.post('/api/room', checkAuth, async (req, res) => {
 // GET paginated messages for a room (WhatsApp style history load)
 app.get('/api/messages', async (req, res) => {
   try {
-    const { room, before } = req.query;
+    const { room, before, limit = 30 } = req.query;
     let query = { room };
 
-    // If 'before' timestamp is provided, fetch messages older than that point
     if (before) {
       query.createdAt = { $lt: new Date(before) };
     }
 
     const messages = await Message.find(query)
-      .sort({ createdAt: -1 }) // Fetch newest first to chunk properly
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
 
-    // Reverse so they return in chronological order (oldest -> newest)
     res.json(messages.reverse());
   } catch (err) {
     console.error('Error fetching messages:', err);
