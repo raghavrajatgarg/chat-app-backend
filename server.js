@@ -81,27 +81,30 @@ app.post('/api/room', checkAuth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-// GET paginated messages for a room (WhatsApp style history load)
 app.get('/api/messages', async (req, res) => {
+  console.log('[SERVER DEBUG] Incoming GET /api/messages request:', req.query);
   try {
     const { room, before, limit = 30 } = req.query;
+    console.log(`[SERVER DEBUG] Parsed params -> room: ${room}, before: ${before}, limit: ${limit}`);
+    
     let query = { room };
 
     if (before) {
       query.createdAt = { $lt: new Date(before) };
+      console.log('[SERVER DEBUG] Added before filter to query:', query.createdAt);
     }
 
     const messages = await Message.find(query)
       .sort({ createdAt: -1 })
       .limit(parseInt(limit));
 
+    console.log(`[SERVER DEBUG] Successfully found ${messages.length} messages from DB for room: ${room}`);
     res.json(messages.reverse());
   } catch (err) {
-    console.error('Error fetching messages:', err);
+    console.error('[SERVER ERROR] Failed to fetch messages:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 app.get('/api/users', async (req, res) => {
   try {
     const users = await User.find({}).sort({ lastSeen: -1 }).exec();
