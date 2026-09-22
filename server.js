@@ -294,55 +294,8 @@ io.on('connection', (socket) => {
     socket.to(room).emit('display_typing', { userName, room });
   });
 
-  socket.on('typing_stop', ({ room }) => {
+ socket.on('typing_stop', ({ room }) => {
     socket.to(room).emit('hide_typing', { room });
-  });
-
-
-      const newMessage = new Message({
-        text: data.text,
-        sender: data.sender,
-        senderUid: data.senderUid, 
-        avatar: data.avatar,
-        room: data.room || 'general',
-        image: data.image || null,
-        createdAt: new Date()
-      });
-      
-      const savedMessage = await newMessage.save();
-      io.emit('receive_message', savedMessage);
-
-      // Handle FCM background push notifications
-      const allUsersObj = await redisClient.hGetAll('active_users');
-      const targets = Object.values(allUsersObj).map(u => JSON.parse(u));
-
-      targets.forEach((userNode) => {
-        const isUserInDifferentRoom = userNode.room !== savedMessage.room;
-        const isNotTheSender = userNode.uid !== savedMessage.senderUid;
-        
-        if (isUserInDifferentRoom && isNotTheSender && userNode.pushSubscription) {
-          const fcmPayload = {
-            notification: {
-              title: `#${savedMessage.room} | ${savedMessage.sender}`,
-              body: savedMessage.text !== "\u200B" ? savedMessage.text : "Sent an image asset 📷"
-            },
-            data: {
-              icon: savedMessage.avatar || 'https://placeholder.com',
-              url: 'https://vercel.app'
-            },
-            token: userNode.pushSubscription
-          };
-
-          const { getMessaging } = require('firebase-admin/messaging');
-          getMessaging().send(fcmPayload).catch((err) => console.error('❌ FCM push error:', err));
-        }
-      });
-
-      if (typeof callback === 'function') callback({ success: true });
-    } catch (error) {
-      console.error('❌ Error sending message:', error);
-      if (typeof callback === 'function') callback({ success: false, error: error.message });
-    }
   });
 
   socket.on('disconnect', async () => {
@@ -350,7 +303,7 @@ io.on('connection', (socket) => {
     await redisClient.hDel('active_users', socket.id);
     await broadcastActiveUsers();
   });
-});
+}); // 👈 This correctly closes io.on('connection')
 
 // Startup sequence connecting Redis, MongoDB, and HTTP Server
 const PORT = process.env.PORT || 5000;
