@@ -63,6 +63,31 @@ io.use(async (socket, next) => {
   }
 });
 
+// GET search messages across the whole history of a room
+app.get('/search', async (req, res) => {
+  try {
+    const { room, query } = req.query;
+    
+    if (!room || !query) {
+      return res.status(400).json({ error: 'Room and query parameters are required' });
+    }
+
+    // Case-insensitive regex search across the entire database for this room
+    // Limit to 50 results to keep it snappy and prevent overloading the client
+    const messages = await Message.find({
+      room: room,
+      text: { $regex: query, $options: 'i' }
+    })
+    .sort({ createdAt: 1 })
+    .limit(50);
+
+    res.json(messages);
+  } catch (err) {
+    console.error('Failed to execute search:', err);
+    res.status(500).json({ error: 'Internal server error during search' });
+  }
+});
+
 const MONGO_URI = process.env.MONGO_URI || "YOUR_MONGODB_ATLAS_CONNECTION_STRING";
 
 app.get('/ping', (req, res) => {
