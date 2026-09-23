@@ -162,7 +162,7 @@ async function broadcastActiveUsers() {
     console.error("❌ Error fetching active users from Redis:", err);
   }
 }
-
+const userSockets = new Map();
 io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
   socket.on('send_message', async (data, callback) => {
@@ -200,28 +200,55 @@ io.on('connection', (socket) => {
     }
     
   });
-// Replace your current userSockets registration logic with this:
-
-// Store mapping of firebaseUid -> socket.id globally or inside server scope
-const userSockets = new Map();
-
-// Listen for the event sent from App_2.jsx
+       // Store mapping of firebaseUid -> socket.id
 socket.on("realRegisterUser", (firebaseUid) => {
-  if (firebaseUid) {
-    userSockets.set(firebaseUid, socket.id);
-    console.log(`✅ User successfully mapped: ${firebaseUid} -> ${socket.id}`);
+    if (firebaseUid) {
+      userSockets.set(firebaseUid, socket.id);
+      console.log(`✅ User successfully mapped: ${firebaseUid} -> ${socket.id}`);
+    }
+  });
+
+  // 2. Start Call
+  socket.on("start_call", ({ signal, to, name }) => {
+    const targetSocketId = userSockets.get(to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("incoming_call", {
+        signal,
+        from: socket.user.uid,
+        name,
+      });
+    }
+  });
+// 2. User B answers the call
+socket.on("answer_call", (data) => {
+  const targetSocketId = userSockets.get(data.to);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit("call_accepted", data.signal);
   }
 });
 
-// 1. User A initiates a call to User B
-socket.on("start_call", ({ userToCall, signalData, from, name }) => {
-  const targetSocketId = userSockets.get(userToCall);
+// 3. Handle WebRTC ICE candidates exchange
+socket.on("ice_candidate", (data) => {
+  const targetSocketId = userSockets.get(data.to);
   if (targetSocketId) {
-    io.to(targetSocketId).emit("incoming_call", {
-      signal: signalData,
-      from,
-      name,
-    });
+    io.to(targetSocketId).emit("ice_candidate", data.target);
+  }
+});
+
+// 4. Handle call rejection or hanging up
+socket.on("hangup_call", ({ to }) => {
+  const targetSocketId = userSockets.get(to);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit("call_ended");
+  }
+});
+
+socket.on("disconnect", () => {
+  for (let [uid, sId] of userSockets.entries()) {
+    if (sId === socket.id) {
+      userSockets.delete(uid);
+      break;
+    }
   }
 });
 
