@@ -189,7 +189,7 @@ io.on('connection', (socket) => {
       });
       
       const savedMessage = await newMessage.save();
-      
+
       // Broadcast to everyone in the room (main feed or thread handles filtering client-side)
       io.emit('receive_message', savedMessage);
 
@@ -198,7 +198,61 @@ io.on('connection', (socket) => {
       console.error('❌ Error sending message:', error);
       if (typeof callback === 'function') callback({ success: false, error: error.message });
     }
+    
   });
+       // Store mapping of firebaseUid -> socket.id
+const userSockets = new Map();
+
+// When a user logs in and registers their UID with their socket
+socket.realRegisterUser = (firebaseUid) => {
+  userSockets.set(firebaseUid, socket.id);
+  console.log(`User mapped: ${firebaseUid} -> ${socket.id}`);
+};
+
+// 1. User A initiates a call to User B
+socket.on("call_user", ({ userToCall, signalData, from, name }) => {
+  const targetSocketId = userSockets.get(userToCall);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit("incoming_call", {
+      signal: signalData,
+      from,
+      name,
+    });
+  }
+});
+
+// 2. User B answers the call
+socket.on("answer_call", (data) => {
+  const targetSocketId = userSockets.get(data.to);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit("call_accepted", data.signal);
+  }
+});
+
+// 3. Handle WebRTC ICE candidates exchange
+socket.on("ice_candidate", (data) => {
+  const targetSocketId = userSockets.get(data.to);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit("ice_candidate", data.target);
+  }
+});
+
+// 4. Handle call rejection or hanging up
+socket.on("hangup_call", ({ to }) => {
+  const targetSocketId = userSockets.get(to);
+  if (targetSocketId) {
+    io.to(targetSocketId).emit("call_ended");
+  }
+});
+
+socket.on("disconnect", () => {
+  for (let [uid, sId] of userSockets.entries()) {
+    if (sId === socket.id) {
+      userSockets.delete(uid);
+      break;
+    }
+  }
+});
 
   socket.on('mark_messages_read', async ({ messageIds, userId, room }) => {
     try {
