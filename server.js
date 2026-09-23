@@ -179,6 +179,7 @@ io.on('connection', (socket) => {
         text: data.text,
         sender: data.sender,
         senderUid: data.senderUid, 
+        audio: data.audio || null,
         avatar: data.avatar,
         room: data.room || 'general',
         parentId: data.parentId || null, // ✨ Support for threads

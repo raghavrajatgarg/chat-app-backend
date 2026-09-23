@@ -43,6 +43,10 @@ const messageSchema = new mongoose.Schema({
   readBy: {
     type: [String],
     default: []
+  },
+  audio: {
+    type: String,
+    default: null
   }
 });
 
