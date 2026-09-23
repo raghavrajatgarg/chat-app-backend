@@ -200,17 +200,21 @@ io.on('connection', (socket) => {
     }
     
   });
-       // Store mapping of firebaseUid -> socket.id
+// Replace your current userSockets registration logic with this:
+
+// Store mapping of firebaseUid -> socket.id globally or inside server scope
 const userSockets = new Map();
 
-// When a user logs in and registers their UID with their socket
-socket.realRegisterUser = (firebaseUid) => {
-  userSockets.set(firebaseUid, socket.id);
-  console.log(`User mapped: ${firebaseUid} -> ${socket.id}`);
-};
+// Listen for the event sent from App_2.jsx
+socket.on("realRegisterUser", (firebaseUid) => {
+  if (firebaseUid) {
+    userSockets.set(firebaseUid, socket.id);
+    console.log(`✅ User successfully mapped: ${firebaseUid} -> ${socket.id}`);
+  }
+});
 
 // 1. User A initiates a call to User B
-socket.on("call_user", ({ userToCall, signalData, from, name }) => {
+socket.on("start_call", ({ userToCall, signalData, from, name }) => {
   const targetSocketId = userSockets.get(userToCall);
   if (targetSocketId) {
     io.to(targetSocketId).emit("incoming_call", {
@@ -218,39 +222,6 @@ socket.on("call_user", ({ userToCall, signalData, from, name }) => {
       from,
       name,
     });
-  }
-});
-
-// 2. User B answers the call
-socket.on("answer_call", (data) => {
-  const targetSocketId = userSockets.get(data.to);
-  if (targetSocketId) {
-    io.to(targetSocketId).emit("call_accepted", data.signal);
-  }
-});
-
-// 3. Handle WebRTC ICE candidates exchange
-socket.on("ice_candidate", (data) => {
-  const targetSocketId = userSockets.get(data.to);
-  if (targetSocketId) {
-    io.to(targetSocketId).emit("ice_candidate", data.target);
-  }
-});
-
-// 4. Handle call rejection or hanging up
-socket.on("hangup_call", ({ to }) => {
-  const targetSocketId = userSockets.get(to);
-  if (targetSocketId) {
-    io.to(targetSocketId).emit("call_ended");
-  }
-});
-
-socket.on("disconnect", () => {
-  for (let [uid, sId] of userSockets.entries()) {
-    if (sId === socket.id) {
-      userSockets.delete(uid);
-      break;
-    }
   }
 });
 
