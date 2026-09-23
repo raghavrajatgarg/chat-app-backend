@@ -183,6 +183,7 @@ io.on('connection', (socket) => {
         room: data.room || 'general',
         parentId: data.parentId || null, // ✨ Support for threads
         image: data.image || null,
+        clientMessageId: data.clientMessageId,
         createdAt: new Date()
       });
       
