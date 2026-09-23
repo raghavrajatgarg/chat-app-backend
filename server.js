@@ -209,7 +209,15 @@ socket.on("realRegisterUser", (firebaseUid) => {
   });
 
   // 2. Start Call
+// Automatically register the user using their authenticated Firebase token data
+  if (socket.user && socket.user.uid) {
+    userSockets.set(socket.user.uid, socket.id);
+    console.log(`✅ User automatically mapped: ${socket.user.uid} -> ${socket.id}`);
+  }
+
+  // 1. Start Call
   socket.on("start_call", ({ signal, to, name }) => {
+    console.log(`📞 Start call from ${socket.user.uid} to ${to}`);
     const targetSocketId = userSockets.get(to);
     if (targetSocketId) {
       io.to(targetSocketId).emit("incoming_call", {
@@ -217,39 +225,43 @@ socket.on("realRegisterUser", (firebaseUid) => {
         from: socket.user.uid,
         name,
       });
+    } else {
+      console.warn(`❌ Target user ${to} not found in userSockets map!`);
     }
   });
-// 2. User B answers the call
-socket.on("answer_call", (data) => {
-  const targetSocketId = userSockets.get(data.to);
-  if (targetSocketId) {
-    io.to(targetSocketId).emit("call_accepted", data.signal);
-  }
-});
 
-// 3. Handle WebRTC ICE candidates exchange
-socket.on("ice_candidate", (data) => {
-  const targetSocketId = userSockets.get(data.to);
-  if (targetSocketId) {
-    io.to(targetSocketId).emit("ice_candidate", data.target);
-  }
-});
-
-// 4. Handle call rejection or hanging up
-socket.on("hangup_call", ({ to }) => {
-  const targetSocketId = userSockets.get(to);
-  if (targetSocketId) {
-    io.to(targetSocketId).emit("call_ended");
-  }
-});
-
-socket.on("disconnect", () => {
-  for (let [uid, sId] of userSockets.entries()) {
-    if (sId === socket.id) {
-      userSockets.delete(uid);
-      break;
+  // 2. Answer Call
+  socket.on("answer_call", ({ signal, to }) => {
+    console.log(`✅ Answer call to ${to}`);
+    const targetSocketId = userSockets.get(to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call_accepted", signal);
     }
-  }
+  });
+
+  // 3. ICE Candidates
+  socket.on("ice_candidate", ({ target, to }) => {
+    const targetSocketId = userSockets.get(to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("ice_candidate", target);
+    }
+  });
+
+  // 4. Hangup Call
+  socket.on("hangup_call", ({ to }) => {
+    const targetSocketId = userSockets.get(to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("call_ended");
+    }
+  });
+
+  socket.on("disconnect", () => {
+    for (let [uid, sId] of userSockets.entries()) {
+      if (sId === socket.id) {
+        userSockets.delete(uid);
+        break;
+      }
+    }
 });
 
   socket.on('mark_messages_read', async ({ messageIds, userId, room }) => {
