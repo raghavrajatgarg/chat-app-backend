@@ -11,7 +11,6 @@ const Message = require('./models/Message');
 const User = require('./models/User');
 const webpush = require('web-push');
 const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const multer = require('multer');
 const { getAuth } = require('firebase-admin/auth');
 webpush.setVapidDetails(
@@ -54,24 +53,31 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'chat_app_uploads',
-    resource_type: 'auto', // Automatically detects images, audio, or files
-  },
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
+const PUBLIC_ROOMS = new Set(['general', 'tech', 'random', 'gaming']);
 
-const upload = multer({ storage: storage });
+function canAccessRoom(room, uid) {
+  if (!room || !uid) return false;
+  return PUBLIC_ROOMS.has(room) || room.split('_').includes(uid);
+}
 
 // File Upload REST Endpoint
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', checkAuth, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    // Return the secure CDN URL provided by Cloudinary
-    res.json({ url: req.file.path });
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'chat_app_uploads', resource_type: 'auto' },
+        (error, uploadedFile) => error ? reject(error) : resolve(uploadedFile)
+      );
+      stream.end(req.file.buffer);
+    });
+    res.json({ url: result.secure_url });
   } catch (err) {
     console.error('❌ Cloudinary Upload Error:', err);
     res.status(500).json({ error: 'File upload failed', details: err.message });
@@ -92,11 +98,15 @@ io.use(async (socket, next) => {
   }
 });
 // Add this new endpoint to fetch replies for a specific parent message
-app.get('/api/messages/thread', async (req, res) => {
+app.get('/api/messages/thread', checkAuth, async (req, res) => {
   try {
     const { parentId } = req.query;
     if (!parentId) {
       return res.status(400).json({ error: 'parentId parameter is required' });
+    }
+    const parentMessage = await Message.findById(parentId).select('room');
+    if (!parentMessage || !canAccessRoom(parentMessage.room, req.user.uid)) {
+      return res.status(403).json({ error: 'You do not have access to this thread' });
     }
     const replies = await Message.find({ parentId }).sort({ createdAt: 1 });
     res.json(replies);
@@ -106,12 +116,15 @@ app.get('/api/messages/thread', async (req, res) => {
   }
 });
 // GET search messages across the whole history of a room
-app.get('/api/messages/search', async (req, res) => {
+app.get('/api/messages/search', checkAuth, async (req, res) => {
   try {
     const { room, query } = req.query;
     
     if (!room || !query) {
       return res.status(400).json({ error: 'Room and query parameters are required' });
+    }
+    if (!canAccessRoom(room, req.user.uid)) {
+      return res.status(403).json({ error: 'You do not have access to this room' });
     }
 
     // Case-insensitive regex search across the entire database for this room
@@ -148,10 +161,13 @@ app.post('/api/room', checkAuth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.get('/api/messages', async (req, res) => {
+app.get('/api/messages', checkAuth, async (req, res) => {
   console.log('[SERVER DEBUG] Incoming GET /api/messages request:', req.query);
   try {
     const { room, before, limit = 30 } = req.query;
+    if (!canAccessRoom(room, req.user.uid)) {
+      return res.status(403).json({ error: 'You do not have access to this room' });
+    }
     console.log(`[SERVER DEBUG] Parsed params -> room: ${room}, before: ${before}, limit: ${limit}`);
     
     let query = { room };
@@ -172,7 +188,7 @@ app.get('/api/messages', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', checkAuth, async (req, res) => {
   try {
     const users = await User.find({}).sort({ lastSeen: -1 }).exec();
     res.status(200).json(users);
@@ -196,7 +212,19 @@ io.on('connection', (socket) => {
   console.log('📡 Real-time user linked to node:', socket.id);
   socket.on('send_message', async (data, callback) => {
     try {
-      const rateLimitKey = `rate_limit:${data.senderUid}`;
+      const room = data.room || 'general';
+      if (!canAccessRoom(room, socket.user.uid)) {
+        if (typeof callback === 'function') callback({ success: false, error: 'You do not have access to this room.' });
+        return;
+      }
+      if (data.parentId) {
+        const parentMessage = await Message.findById(data.parentId).select('room');
+        if (!parentMessage || parentMessage.room !== room) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Invalid thread parent.' });
+          return;
+        }
+      }
+      const rateLimitKey = `rate_limit:${socket.user.uid}`;
       const requestCount = await redisClient.incr(rateLimitKey);
       if (requestCount === 1) await redisClient.expire(rateLimitKey, 2);
       if (requestCount > 5) {
@@ -206,11 +234,11 @@ io.on('connection', (socket) => {
 
       const newMessage = new Message({
         text: data.text,
-        sender: data.sender,
-        senderUid: data.senderUid, 
+        sender: socket.user.name || socket.user.email || 'User',
+        senderUid: socket.user.uid,
         audio: data.audio || null,
-        avatar: data.avatar,
-        room: data.room || 'general',
+        avatar: socket.user.picture || null,
+        room,
         parentId: data.parentId || null, // ✨ Support for threads
         image: data.image || null,
         clientMessageId: data.clientMessageId,
@@ -220,7 +248,7 @@ io.on('connection', (socket) => {
       const savedMessage = await newMessage.save();
 
       // Broadcast to everyone in the room (main feed or thread handles filtering client-side)
-      io.emit('receive_message', savedMessage);
+      io.to(room).emit('receive_message', savedMessage);
 
       if (typeof callback === 'function') callback({ success: true });
     } catch (error) {
@@ -293,26 +321,31 @@ socket.on("realRegisterUser", (firebaseUid) => {
     }
 });
 
-  socket.on('mark_messages_read', async ({ messageIds, userId, room }) => {
+  socket.on('mark_messages_read', async ({ messageIds, room }) => {
     try {
+      if (!canAccessRoom(room, socket.user.uid)) return;
       await Message.updateMany(
-        { _id: { $in: messageIds } },
-        { $addToSet: { readBy: userId } }
+        { _id: { $in: messageIds }, room },
+        { $addToSet: { readBy: socket.user.uid } }
       );
-      io.to(room).emit('messages_read_update', { messageIds, userId, room });
+      io.to(room).emit('messages_read_update', { messageIds, userId: socket.user.uid, room });
     } catch (err) {
       console.error("Error updating read receipts:", err);
     }
   });
 
   socket.on('user_connected', async (userData) => {
-    if (userData && userData.uid) {
-      console.log(`📡 Registration Sync for ${userData.name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
+    if (userData) {
+      const uid = socket.user.uid;
+      const name = socket.user.name || socket.user.email || 'User';
+      const email = socket.user.email || null;
+      const avatar = socket.user.picture || null;
+      console.log(`📡 Registration Sync for ${name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
       
       try {
         await User.findOneAndUpdate(
-          { uid: userData.uid },
-          { name: userData.name, email: userData.email, avatar: userData.avatar, lastSeen: new Date() },
+          { uid },
+          { name, email, avatar, lastSeen: new Date() },
           { upsert: true, new: true }
         );
       } catch (dbErr) {
@@ -320,9 +353,9 @@ socket.on("realRegisterUser", (firebaseUid) => {
       }
 
       socket.userProfile = {
-        uid: userData.uid,
-        name: userData.name || userData.email,
-        avatar: userData.avatar,
+        uid,
+        name,
+        avatar,
         pushSubscription: userData.pushSubscription || null 
       };
 
@@ -339,37 +372,58 @@ socket.on("realRegisterUser", (firebaseUid) => {
     }
   });
 
+  socket.on('profile_updated', async ({ name }) => {
+    const trimmedName = typeof name === 'string' ? name.trim().slice(0, 50) : '';
+    if (!trimmedName) return;
+    socket.user.name = trimmedName;
+    try {
+      await User.findOneAndUpdate(
+        { uid: socket.user.uid },
+        { name: trimmedName, lastSeen: new Date() },
+        { upsert: true }
+      );
+      if (socket.userProfile) {
+        socket.userProfile.name = trimmedName;
+        await redisClient.hSet('active_users', socket.id, JSON.stringify({ ...socket.userProfile, room: socket.currentRoom }));
+        await broadcastActiveUsers();
+      }
+    } catch (error) {
+      console.error('Failed to update display name:', error);
+    }
+  });
+
   socket.on('delete_message', async ({ messageId, userId }) => {
     try {
       const message = await Message.findById(messageId);
-      if (!message || message.senderUid !== userId) return;
+      if (!message || message.senderUid !== socket.user.uid) return;
 
       const room = message.room;
       await Message.findByIdAndDelete(messageId);
-      io.emit('message_deleted', messageId);
+      io.to(room).emit('message_deleted', messageId);
     } catch (err) {
       console.error("Error deleting message:", err);
     }
   });
 
-  socket.on('edit_message', async ({ messageId, text, userId, room }) => {
+  socket.on('edit_message', async ({ messageId, text }) => {
     try {
       const message = await Message.findById(messageId);
       if (!message) return;
 
-      if (message.senderUid !== userId) return;
+      if (message.senderUid !== socket.user.uid) return;
 
       message.text = text;
       message.edited = true; 
       await message.save();
 
-      io.to(room).emit('message_updated', message);
+      io.to(message.room).emit('message_updated', message);
     } catch (err) {
       console.error("❌ Error editing message:", err);
     }
   });
 
   socket.on('join_room', async (room) => {
+    if (!canAccessRoom(room, socket.user.uid)) return;
     socket.leave(socket.currentRoom);
     socket.join(room);
     socket.currentRoom = room;
