@@ -10,8 +10,10 @@ const checkAuth = require('./middleware/auth');
 const Message = require('./models/Message');
 const User = require('./models/User');
 const webpush = require('web-push');
-
-// Identify your application securely to global push routing centers
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const multer = require('multer');
+const { getAuth } = require('firebase-admin/auth');
 webpush.setVapidDetails(
   'mailto:your-email@example.com',
   process.env.VAPID_PUBLIC_KEY || "YOUR_GENERATED_PUBLIC_KEY_HERE",
@@ -46,8 +48,35 @@ const io = new Server(server, {
   pingInterval: 5000,
   pingTimeout: 2000,
 });
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
-const { getAuth } = require('firebase-admin/auth');
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'chat_app_uploads',
+    resource_type: 'auto', // Automatically detects images, audio, or files
+  },
+});
+
+const upload = multer({ storage: storage });
+
+// File Upload REST Endpoint
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    // Return the secure CDN URL provided by Cloudinary
+    res.json({ url: req.file.path });
+  } catch (err) {
+    console.error('❌ Cloudinary Upload Error:', err);
+    res.status(500).json({ error: 'File upload failed', details: err.message });
+  }
+});
 
 io.use(async (socket, next) => {
   const token = socket.handshake.auth.token;
@@ -317,7 +346,7 @@ socket.on("realRegisterUser", (firebaseUid) => {
 
       const room = message.room;
       await Message.findByIdAndDelete(messageId);
-      io.to(room).emit('message_deleted', messageId);
+      io.emit('message_deleted', messageId);
     } catch (err) {
       console.error("Error deleting message:", err);
     }
