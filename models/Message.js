@@ -55,7 +55,8 @@ const messageSchema = new mongoose.Schema({
   audio: {
     type: String,
     default: null
-  }
+  },
+  reactions: { emoji: String, userId: String }
 });
 
 module.exports = mongoose.model('Message', messageSchema);

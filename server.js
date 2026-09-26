@@ -254,7 +254,8 @@ io.on('connection', (socket) => {
         parentId: data.parentId || null, // ✨ Support for threads
         image: null,
         clientMessageId: data.clientMessageId,
-        createdAt: new Date()
+        createdAt: new Date(),
+        reactions: null
       });
       
       const savedMessage = await newMessage.save();
@@ -345,6 +346,32 @@ socket.on("realRegisterUser", (firebaseUid) => {
       console.error("Error updating read receipts:", err);
     }
   });
+
+  socket.on('toggle_reaction', async ({ messageId, emoji }) => {
+  try {
+    const message = await Message.findById(messageId);
+    if (!message) return;
+    if (!canAccessRoom(message.room, socket.user.uid)) return;
+
+    let reactions = message.reactions || [];
+    const existingIndex = reactions.findIndex(r => r.userId === socket.user.uid && r.emoji === emoji);
+
+    if (existingIndex > -1) {
+      // Remove reaction if user clicks the same emoji again
+      reactions.splice(existingIndex, 1);
+    } else {
+      // Add new reaction
+      reactions.push({ emoji, userId: socket.user.uid });
+    }
+
+    message.reactions = reactions;
+    await message.save();
+
+    io.to(message.room).emit('message_updated', serializeMessage(message));
+  } catch (err) {
+    console.error('Error toggling reaction:', err);
+  }
+});
 
   socket.on('user_connected', async (userData) => {
     if (userData) {
