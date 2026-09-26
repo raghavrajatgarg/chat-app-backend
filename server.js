@@ -21,6 +21,10 @@ webpush.setVapidDetails(
   process.env.VAPID_PUBLIC_KEY || "YOUR_GENERATED_PUBLIC_KEY_HERE",
   process.env.VAPID_PRIVATE_KEY || "YOUR_GENERATED_PRIVATE_KEY_HERE"
 );
+const crypto = require('crypto');
+
+const secureToken = crypto.randomBytes(32).toString('hex');
+console.log(secureToken);
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
