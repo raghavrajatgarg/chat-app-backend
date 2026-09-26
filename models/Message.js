@@ -28,6 +28,14 @@ const messageSchema = new mongoose.Schema({
     type: String, 
     default: ''
   },
+  contentCiphertext: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+  encryptedContent: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
   clientMessageId: {
     type: String,
     default: null

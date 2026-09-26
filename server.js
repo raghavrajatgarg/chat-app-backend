@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -9,6 +11,7 @@ const { createAdapter } = require('@socket.io/redis-adapter');
 const checkAuth = require('./middleware/auth');
 const Message = require('./models/Message');
 const User = require('./models/User');
+const { encryptMessageContent, decryptMessageContent, serializeMessage, validateEncryptionKey } = require('./messageEncryption');
 const webpush = require('web-push');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
@@ -109,7 +112,7 @@ app.get('/api/messages/thread', checkAuth, async (req, res) => {
       return res.status(403).json({ error: 'You do not have access to this thread' });
     }
     const replies = await Message.find({ parentId }).sort({ createdAt: 1 });
-    res.json(replies);
+    res.json(replies.map(serializeMessage));
   } catch (err) {
     console.error('[SERVER ERROR] Failed to fetch thread replies:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -127,16 +130,20 @@ app.get('/api/messages/search', checkAuth, async (req, res) => {
       return res.status(403).json({ error: 'You do not have access to this room' });
     }
 
-    // Case-insensitive regex search across the entire database for this room
-    // Limit to 50 results to keep it snappy and prevent overloading the client
-    const messages = await Message.find({
-      room: room,
-      text: { $regex: query, $options: 'i' }
-    })
-    .sort({ createdAt: 1 })
-    .limit(50);
-
-    res.json(messages);
+    const matches = [];
+    const cursor = Message.find({ room }).sort({ createdAt: -1 }).cursor();
+    try {
+      for await (const storedMessage of cursor) {
+        const message = serializeMessage(storedMessage);
+        if (message.text && message.text.toLowerCase().includes(String(query).toLowerCase())) {
+          matches.push(message);
+          if (matches.length === 50) break;
+        }
+      }
+    } finally {
+      await cursor.close();
+    }
+    res.json(matches.reverse());
   } catch (err) {
     console.error('Failed to execute search:', err);
     res.status(500).json({ error: 'Internal server error during search' });
@@ -182,7 +189,7 @@ app.get('/api/messages', checkAuth, async (req, res) => {
       .limit(parseInt(limit));
 
     console.log(`[SERVER DEBUG] Successfully found ${messages.length} messages from DB for room: ${room}`);
-    res.json(messages.reverse());
+    res.json(messages.reverse().map(serializeMessage));
   } catch (err) {
     console.error('[SERVER ERROR] Failed to fetch messages:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -190,7 +197,7 @@ app.get('/api/messages', checkAuth, async (req, res) => {
 });
 app.get('/api/users', checkAuth, async (req, res) => {
   try {
-    const users = await User.find({}).sort({ lastSeen: -1 }).exec();
+    const users = await User.find({}).select('uid name email avatar lastSeen').sort({ lastSeen: -1 }).exec();
     res.status(200).json(users);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -233,14 +240,19 @@ io.on('connection', (socket) => {
       }
 
       const newMessage = new Message({
-        text: data.text,
+        text: '',
+        contentCiphertext: encryptMessageContent({
+          text: data.text || '',
+          image: data.image || null,
+          audio: data.audio || null,
+        }),
         sender: socket.user.name || socket.user.email || 'User',
         senderUid: socket.user.uid,
-        audio: data.audio || null,
+        audio: null,
         avatar: socket.user.picture || null,
         room,
         parentId: data.parentId || null, // ✨ Support for threads
-        image: data.image || null,
+        image: null,
         clientMessageId: data.clientMessageId,
         createdAt: new Date()
       });
@@ -248,7 +260,7 @@ io.on('connection', (socket) => {
       const savedMessage = await newMessage.save();
 
       // Broadcast to everyone in the room (main feed or thread handles filtering client-side)
-      io.to(room).emit('receive_message', savedMessage);
+      io.to(room).emit('receive_message', serializeMessage(savedMessage));
 
       if (typeof callback === 'function') callback({ success: true });
     } catch (error) {
@@ -405,20 +417,29 @@ socket.on("realRegisterUser", (firebaseUid) => {
     }
   });
 
-  socket.on('edit_message', async ({ messageId, text }) => {
+  socket.on('edit_message', async ({ messageId, text }, callback) => {
     try {
       const message = await Message.findById(messageId);
       if (!message) return;
 
       if (message.senderUid !== socket.user.uid) return;
 
-      message.text = text;
+      const content = message.contentCiphertext
+        ? decryptMessageContent(message.contentCiphertext)
+        : { text: message.text || '', image: message.image || null, audio: message.audio || null };
+      content.text = text;
+      message.text = '';
+      message.image = null;
+      message.audio = null;
+      message.contentCiphertext = encryptMessageContent(content);
       message.edited = true; 
       await message.save();
 
-      io.to(message.room).emit('message_updated', message);
+      io.to(message.room).emit('message_updated', serializeMessage(message));
+      if (typeof callback === 'function') callback({ success: true });
     } catch (err) {
       console.error("❌ Error editing message:", err);
+      if (typeof callback === 'function') callback({ success: false, error: err.message });
     }
   });
 
@@ -459,6 +480,7 @@ const PORT = process.env.PORT || 5000;
 
 async function startServer() {
   try {
+    validateEncryptionKey();
     await Promise.all([
       redisClient.connect(),
       subClient.connect(),
