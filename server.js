@@ -350,32 +350,38 @@ socket.on("realRegisterUser", (firebaseUid) => {
       console.error("Error updating read receipts:", err);
     }
   });
-
-  socket.on('toggle_reaction', async ({ messageId, emoji }) => {
+// 📁 Inside server.js, update your event listener block:
+socket.on('toggle_reaction', async ({ messageId, emoji }) => {
   try {
     const message = await Message.findById(messageId);
     if (!message) return;
     if (!canAccessRoom(message.room, socket.user.uid)) return;
 
-    let reactions = message.reactions || [];
-    const existingIndex = reactions.findIndex(r => r.userId === socket.user.uid && r.emoji === emoji);
+    // Type checking: Ensures data treats values as arrays securely
+    let reactions = Array.isArray(message.reactions) ? message.reactions : [];
+
+    const existingIndex = reactions.findIndex(
+      (r) => r.userId === socket.user.uid && r.emoji === emoji
+    );
 
     if (existingIndex > -1) {
-      // Remove reaction if user clicks the same emoji again
+      // Remove reaction if the user clicks the same emoji again
       reactions.splice(existingIndex, 1);
     } else {
-      // Add new reaction
+      // Add new reaction array entry tracking elements
       reactions.push({ emoji, userId: socket.user.uid });
     }
 
     message.reactions = reactions;
     await message.save();
 
+    // Broadcasts updated schema tray straight out to everyone in the room loop
     io.to(message.room).emit('message_updated', serializeMessage(message));
   } catch (err) {
     console.error('Error toggling reaction:', err);
   }
 });
+
 
   socket.on('user_connected', async (userData) => {
     if (userData) {
