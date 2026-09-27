@@ -11,7 +11,7 @@ const { createAdapter } = require('@socket.io/redis-adapter');
 const checkAuth = require('./middleware/auth');
 const Message = require('./models/Message');
 const User = require('./models/User');
-const { encryptMessageContent, decryptMessageContent, serializeMessage, validateEncryptionKey } = require('./messageEncryption');
+const { encryptMessageContent, decryptMessageContent, serializeMessage } = require('./messageEncryption');
 const webpush = require('web-push');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
@@ -517,8 +517,7 @@ const PORT = process.env.PORT || 5000;
 
 async function startServer() {
   try {
-    validateEncryptionKey();
-    await Promise.all([
+      await Promise.all([
       redisClient.connect(),
       subClient.connect(),
       mongoose.connect(MONGO_URI)
