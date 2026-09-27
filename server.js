@@ -337,19 +337,36 @@ socket.on("realRegisterUser", (firebaseUid) => {
       }
     }
 });
+socket.on('mark_messages_read', async ({ messageIds, room }) => {
+  try {
+    if (!canAccessRoom(room, socket.user.uid)) return;
 
-  socket.on('mark_messages_read', async ({ messageIds, room }) => {
-    try {
-      if (!canAccessRoom(room, socket.user.uid)) return;
-      await Message.updateMany(
-        { _id: { $in: messageIds }, room },
-        { $addToSet: { readBy: socket.user.uid } }
+    // Loop through each message to cleanly push individual timestamp markers
+    for (const messageId of messageIds) {
+      await Message.updateOne(
+        { 
+          _id: messageId, 
+          room,
+          // Only update if this specific user hasn't read it yet
+          'readBy.userId': { $ne: socket.user.uid } 
+        },
+        { 
+          $push: { 
+            readBy: { 
+              userId: socket.user.uid, 
+              readAt: new Date() // ⚡️ LOGS THE EXACT UNQIUE READ TIMESTAMP
+            } 
+          } 
+        }
       );
-      io.to(room).emit('messages_read_update', { messageIds, userId: socket.user.uid, room });
-    } catch (err) {
-      console.error("Error updating read receipts:", err);
     }
-  });
+
+    io.to(room).emit('messages_read_update', { messageIds, userId: socket.user.uid, room });
+  } catch (err) {
+    console.error("Error updating read receipts:", err);
+  }
+});
+
 // 📁 Inside server.js, update your event listener block:
 socket.on('toggle_reaction', async ({ messageId, emoji }) => {
   try {

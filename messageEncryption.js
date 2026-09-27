@@ -83,21 +83,23 @@ function serializeMessage(msg) {
     }
   });
 
-  // 4. Return clean, consistent schema payload back to server.js maps
-  return {
-    _id: msgObj._id,
-    room: msgObj.room,
-    sender: msgObj.sender,
-    senderUid: msgObj.senderUid,
-    createdAt: msgObj.createdAt,
-    readBy: msgObj.readBy || [],
-    edited: msgObj.edited || false,
-    parentId: msgObj.parentId || null,
-    text: decryptedContent.text,
-    image: decryptedContent.image,
-    audio: decryptedContent.audio,
-    reactions: groupedReactions // Sits as clean structure: { "👍": ["uid1"] }
-  };
+return {
+  _id: msgObj._id,
+  room: msgObj.room,
+  sender: msgObj.sender,
+  senderUid: msgObj.senderUid,
+  createdAt: msgObj.createdAt,
+  edited: msgObj.edited || false,
+  parentId: msgObj.parentId || null,
+  text: decryptedContent.text,
+  image: decryptedContent.image,
+  audio: decryptedContent.audio,
+  reactions: groupedReactions,
+  readBy: Array.isArray(msgObj.readBy) ? msgObj.readBy.map(r => ({
+    uid: r.userId,
+    readAt: r.readAt
+  })) : []
+};
 }
 
 // Ensure it is exported cleanly at the bottom along with encrypt/decrypt methods

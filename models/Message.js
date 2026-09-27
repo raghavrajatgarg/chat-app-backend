@@ -48,10 +48,12 @@ const messageSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  readBy: {
-    type: [String],
-    default: []
-  },
+  readBy: [
+    {
+      userId: { type: String, required: true },
+      readAt: { type: Date, default: Date.now }
+    }
+  ],
   audio: {
     type: String,
     default: null
