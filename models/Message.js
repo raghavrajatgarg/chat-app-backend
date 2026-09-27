@@ -40,6 +40,10 @@ const messageSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  edited: {
+    type: Boolean,
+    default: false
+  },
   createdAt: {
     type: Date,
     default: Date.now

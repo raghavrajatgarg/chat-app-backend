@@ -341,7 +341,7 @@ socket.on('mark_messages_read', async ({ messageIds, room }) => {
   try {
     if (!canAccessRoom(room, socket.user.uid)) return;
 
-    for (const messageId of messageId) {
+    for (const messageId of messageIds) {
       await Message.updateOne(
         { 
           _id: messageId, 
@@ -430,6 +430,9 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
 
       socket.currentRoom = 'general'; 
       socket.join('general');
+      // Stay subscribed to every public room (not just the active one) so
+      // unread counts can be tracked client-side for rooms you're not viewing.
+      PUBLIC_ROOMS.forEach((publicRoom) => socket.join(publicRoom));
 
       // Store active user session in Redis Hash
       await redisClient.hSet('active_users', socket.id, JSON.stringify({ 
@@ -474,6 +477,30 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
     }
   });
 
+  socket.on('mass_delete_messages', async ({ messageIds, room }) => {
+    try {
+      if (!Array.isArray(messageIds) || messageIds.length === 0) return;
+      if (!canAccessRoom(room, socket.user.uid)) return;
+
+      // Only ever delete messages that both belong to this room AND were sent
+      // by the requesting user - same ownership rule as single delete_message.
+      const deletable = await Message.find({
+        _id: { $in: messageIds },
+        room,
+        senderUid: socket.user.uid,
+      }).select('_id');
+
+      if (!deletable.length) return;
+
+      const deletableIds = deletable.map((msg) => msg._id.toString());
+      await Message.deleteMany({ _id: { $in: deletableIds } });
+
+      io.to(room).emit('messages_deleted', deletableIds);
+    } catch (err) {
+      console.error('Error mass deleting messages:', err);
+    }
+  });
+
   socket.on('edit_message', async ({ messageId, text }, callback) => {
     try {
       const message = await Message.findById(messageId);
@@ -502,7 +529,11 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
 
   socket.on('join_room', async (room) => {
     if (!canAccessRoom(room, socket.user.uid)) return;
-    socket.leave(socket.currentRoom);
+    // Only leave the previous room if it was a private (DM) room - sockets
+    // stay joined to every public room permanently so unread counts work.
+    if (!PUBLIC_ROOMS.has(socket.currentRoom)) {
+      socket.leave(socket.currentRoom);
+    }
     socket.join(room);
     socket.currentRoom = room;
     
