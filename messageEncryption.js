@@ -46,42 +46,64 @@ function decryptMessageContent(envelope) {
   ]);
   return JSON.parse(plaintext.toString('utf8'));
 }
+// 📁 File path: messageEncryption.js
+function serializeMessage(msg) {
+  // 1. Safely handle mongoose documents by converting them to a plain JS object
+  const msgObj = msg && typeof msg.toObject === 'function' ? msg.toObject() : msg;
+  
+  if (!msgObj) return null;
 
-function serializeMessage(message) {
-  const record = typeof message.toObject === 'function' ? message.toObject() : { ...message };
-  if (record.encryptedContent && !record.contentCiphertext) {
-    delete record.encryptedContent;
-    return { ...record, text: '[This message was encrypted with the previous device-based system and cannot be opened here.]', image: null, audio: null };
+  // 2. Setup fallbacks for decryption fields
+  let decryptedContent = { text: '', image: null, audio: null };
+  try {
+    if (msgObj.contentCiphertext) {
+      // Ensure decryptMessageContent is imported and available in this file context
+      decryptedContent = decryptMessageContent(msgObj.contentCiphertext);
+    } else {
+      decryptedContent = { 
+        text: msgObj.text || '', 
+        image: msgObj.image || null, 
+        audio: msgObj.audio || null 
+      };
+    }
+  } catch (err) {
+    console.error("❌ Decryption failed for message ID:", msgObj._id, err);
   }
-  if (!record.contentCiphertext) return record;
-  const content = decryptMessageContent(record.contentCiphertext);
-  delete record.contentCiphertext;
-    const groupedReactions = {};
-  if (storedMessage.reactions && Array.isArray(storedMessage.reactions)) {
-    storedMessage.reactions.forEach(r => {
+
+  // 3. Map out reactions array securely into grouped frontend structures
+  const groupedReactions = {};
+  const rawReactions = Array.isArray(msgObj.reactions) ? msgObj.reactions : [];
+  
+  rawReactions.forEach(r => {
+    if (r && r.emoji && r.userId) {
       if (!groupedReactions[r.emoji]) {
         groupedReactions[r.emoji] = [];
       }
       groupedReactions[r.emoji].push(r.userId);
-    });
-  }
+    }
+  });
+
+  // 4. Return clean, consistent schema payload back to server.js maps
   return {
-    _id: storedMessage._id,
-    room: storedMessage.room,
-    sender: storedMessage.sender,
-    senderUid: storedMessage.senderUid,
-    createdAt: storedMessage.createdAt,
-    readBy: storedMessage.readBy || [],
-    edited: storedMessage.edited || false,
-    parentId: storedMessage.parentId,
-    // Decrypted parameters map out here
+    _id: msgObj._id,
+    room: msgObj.room,
+    sender: msgObj.sender,
+    senderUid: msgObj.senderUid,
+    createdAt: msgObj.createdAt,
+    readBy: msgObj.readBy || [],
+    edited: msgObj.edited || false,
+    parentId: msgObj.parentId || null,
     text: decryptedContent.text,
     image: decryptedContent.image,
     audio: decryptedContent.audio,
-    reactions: groupedReactions,
-     ...record,
-     ...content 
+    reactions: groupedReactions // Sits as clean structure: { "👍": ["uid1"] }
   };
 }
 
-module.exports = { encryptMessageContent, decryptMessageContent, serializeMessage, validateEncryptionKey: getEncryptionKey };
+// Ensure it is exported cleanly at the bottom along with encrypt/decrypt methods
+module.exports = {
+  serializeMessage,
+  encryptMessageContent,
+  decryptMessageContent,
+  validateEncryptionKey
+};
