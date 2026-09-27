@@ -2,10 +2,10 @@
 const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema({
-  room: { 
-    type: String, 
-    required: true, 
-    index: true 
+  room: {
+    type: String,
+    required: true,
+    index: true
   },
   parentId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -13,19 +13,19 @@ const messageSchema = new mongoose.Schema({
     default: null,
     index: true
   },
-  senderUid: { 
-    type: String, 
-    required: true 
+  senderUid: {
+    type: String,
+    required: true
   },
-  sender: { 
-    type: String, 
-    required: true 
+  sender: {
+    type: String,
+    required: true
   },
-  avatar: { 
-    type: String 
+  avatar: {
+    type: String
   },
-  text: { 
-    type: String, 
+  text: {
+    type: String,
     default: ''
   },
   contentCiphertext: {
@@ -40,13 +40,13 @@ const messageSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  createdAt: { 
-    type: Date, 
-    default: Date.now 
+  createdAt: {
+    type: Date,
+    default: Date.now
   },
   image: {
     type: String,
-    default: null 
+    default: null
   },
   readBy: {
     type: [String],
@@ -56,7 +56,12 @@ const messageSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  reactions: { emoji: String, userId: String }
+  reactions: [
+    {
+      emoji: { type: String, required: true },
+      userId: { type: String, required: true }
+    }
+  ]
 });
 
 module.exports = mongoose.model('Message', messageSchema);

@@ -56,7 +56,32 @@ function serializeMessage(message) {
   if (!record.contentCiphertext) return record;
   const content = decryptMessageContent(record.contentCiphertext);
   delete record.contentCiphertext;
-  return { ...record, ...content };
+    const groupedReactions = {};
+  if (storedMessage.reactions && Array.isArray(storedMessage.reactions)) {
+    storedMessage.reactions.forEach(r => {
+      if (!groupedReactions[r.emoji]) {
+        groupedReactions[r.emoji] = [];
+      }
+      groupedReactions[r.emoji].push(r.userId);
+    });
+  }
+  return {
+    _id: storedMessage._id,
+    room: storedMessage.room,
+    sender: storedMessage.sender,
+    senderUid: storedMessage.senderUid,
+    createdAt: storedMessage.createdAt,
+    readBy: storedMessage.readBy || [],
+    edited: storedMessage.edited || false,
+    parentId: storedMessage.parentId,
+    // Decrypted parameters map out here
+    text: decryptedContent.text,
+    image: decryptedContent.image,
+    audio: decryptedContent.audio,
+    reactions: groupedReactions,
+     ...record,
+     ...content 
+  };
 }
 
 module.exports = { encryptMessageContent, decryptMessageContent, serializeMessage, validateEncryptionKey: getEncryptionKey };
