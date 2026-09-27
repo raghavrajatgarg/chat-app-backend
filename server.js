@@ -336,25 +336,27 @@ socket.on("realRegisterUser", (firebaseUid) => {
         break;
       }
     }
-});
+});// 📁 File path: server.js (Around line 250)
 socket.on('mark_messages_read', async ({ messageIds, room }) => {
   try {
     if (!canAccessRoom(room, socket.user.uid)) return;
 
-    // Loop through each message to cleanly push individual timestamp markers
-    for (const messageId of messageIds) {
+    for (const messageId of messageId) {
       await Message.updateOne(
         { 
           _id: messageId, 
           room,
-          // Only update if this specific user hasn't read it yet
+          // ⚡️ CRITICAL PROTECTION CONDITIONAL: Only target the message document 
+          // if this specific user has NEVER read it yet.
           'readBy.userId': { $ne: socket.user.uid } 
         },
         { 
-          $push: { 
+          // ⚡️ THE PERMANENT DATABASE FIX: Using $addToSet instead of $push 
+          // guarantees MongoDB rejects duplicates from secondary browser tab connections!
+          $addToSet: { 
             readBy: { 
               userId: socket.user.uid, 
-              readAt: new Date() // ⚡️ LOGS THE EXACT UNQIUE READ TIMESTAMP
+              readAt: new Date() 
             } 
           } 
         }
@@ -363,9 +365,10 @@ socket.on('mark_messages_read', async ({ messageIds, room }) => {
 
     io.to(room).emit('messages_read_update', { messageIds, userId: socket.user.uid, room });
   } catch (err) {
-    console.error("Error updating read receipts:", err);
+    console.error("Error updating read receipts loop:", err);
   }
 });
+
 
 // 📁 Inside server.js, update your event listener block:
 socket.on('toggle_reaction', async ({ messageId, emoji }) => {
