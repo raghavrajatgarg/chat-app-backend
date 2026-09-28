@@ -40,7 +40,6 @@ const authAdmin = admin.auth();
 const getAuth = () => authAdmin; 
 
 // Re-map the getAuth variable so your existing code doesn't break
-const { getAuth } = require('firebase-admin/auth');
 webpush.setVapidDetails(
   'mailto:your-email@example.com',
   process.env.VAPID_PUBLIC_KEY || "YOUR_GENERATED_PUBLIC_KEY_HERE",
