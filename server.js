@@ -26,6 +26,7 @@ try {
     serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
   }
 
+  // 3. CLEAN FIX: Explicitly pass the credential engine inline
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
   });
@@ -33,6 +34,10 @@ try {
 } catch (error) {
   console.error("❌ Firebase parse error:", error);
 }
+
+// 4. Clean variable binding maps (so your middleware/sockets don't break)
+const authAdmin = admin.auth(); 
+const getAuth = () => authAdmin; 
 
 // Re-map the getAuth variable so your existing code doesn't break
 const { getAuth } = require('firebase-admin/auth');
