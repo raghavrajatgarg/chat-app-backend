@@ -15,43 +15,45 @@ const { encryptMessageContent, decryptMessageContent, serializeMessage } = requi
 const webpush = require('web-push');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
-// server.js (Complete Top Section Update)
-const { initializeApp, cert } = require('firebase-admin/app');
+// server.js (Firebase setup section wrapper update)
+const { initializeApp, cert, getApps, getApp } = require('firebase-admin/app');
 const { getAuth: firebaseGetAuth } = require('firebase-admin/auth');
 
 let firebaseApp;
 let getAuth;
 
 try {
-  // 1. Ingest string structure out of active variable context
   if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
     throw new Error("Missing FIREBASE_SERVICE_ACCOUNT environment variable.");
   }
   
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
   
-  // 2. Safety escape block for formatting structures
   if (serviceAccount.private_key) {
     serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
   }
 
-  // 3. Initialize the application using the standalone framework engine
-  firebaseApp = initializeApp({
-    credential: cert(serviceAccount)
-  });
+  // SAFETY FIX: If the app is already initialized elsewhere (like firebaseAdmin.js), 
+  // reuse it instead of invoking initializeApp a second time!
+  if (getApps().length === 0) {
+    firebaseApp = initializeApp({
+      credential: cert(serviceAccount)
+    });
+    console.log("✅ Firebase Admin successfully initialized via Render Environment Variables.");
+  } else {
+    firebaseApp = getApp();
+    console.log("🔄 Reusing existing initialized Firebase Admin application instance.");
+  }
   
-  console.log("✅ Firebase Admin successfully initialized via Render Environment Variables.");
-  
-  // 4. Map the getAuth proxy safely using the initialized instance reference
   getAuth = () => firebaseGetAuth(firebaseApp);
 
 } catch (error) {
   console.error("❌ Firebase initialization crash:", error.message);
-  // Fallback map to prevent the rest of server.js syntax checking from crashing during load
   getAuth = () => ({
     verifyIdToken: () => { throw new Error("Firebase Admin failed to start."); }
   });
 }
+
 
 // Leave your Webpush configurations intact directly below:
 webpush.setVapidDetails(
