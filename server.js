@@ -266,6 +266,33 @@ app.post('/api/users/save-fcm-token', checkAuth, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+// server.js: Add this temporary route right below your existing endpoints
+app.post('/api/test-voip-push', async (req, res) => {
+  const { token, callerName, roomId } = req.body;
+  console.log(`📡 Test endpoint hit! Dispatched token: ${token}`);
+
+  try {
+    const pushMessage = {
+      token: token,
+      android: {
+        priority: 'high' // MANDATORY: Forces the Android CPU to wake up from deep sleep
+      },
+      data: {
+        callId: roomId || "TEST_ROOM_123",
+        callerName: callerName || "Oppo System Tester",
+        type: 'INCOMING_CALL'
+      }
+    };
+
+    // Use the already initialized admin instance you fixed earlier
+    await admin.messaging().send(pushMessage);
+    console.log("✅ High-priority test call packet pushed to Google!");
+    return res.status(200).json({ success: true, message: "Push sent!" });
+  } catch (err) {
+    console.error("❌ Test push failed:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 
 // Helper function to fetch and broadcast current active users from Redis
