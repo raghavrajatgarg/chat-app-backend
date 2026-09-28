@@ -15,6 +15,26 @@ const { encryptMessageContent, decryptMessageContent, serializeMessage } = requi
 const webpush = require('web-push');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
+const admin = require('firebase-admin');
+
+try {
+  // 1. Read string from Render Environment Configs
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  
+  // 2. Safety fix: Convert raw literal '\n' strings back into true native spacing flags
+  if (serviceAccount.private_key) {
+    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+  }
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  console.log("✅ Firebase Admin successfully initialized via Render Environment Variables.");
+} catch (error) {
+  console.error("❌ Firebase parse error:", error);
+}
+
+// Re-map the getAuth variable so your existing code doesn't break
 const { getAuth } = require('firebase-admin/auth');
 webpush.setVapidDetails(
   'mailto:your-email@example.com',
@@ -207,6 +227,25 @@ app.get('/api/users', checkAuth, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// REST Endpoint to save unique hardware FCM tokens from Capacitor mobile app
+app.post('/api/users/save-fcm-token', checkAuth, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token is required' });
+
+    // req.user.uid comes directly from your checkAuth firebase middleware validation
+    await User.findOneAndUpdate(
+      { uid: req.user.uid },
+      { fcmToken: token }
+    );
+
+    res.status(200).json({ success: true, message: 'FCM Token linked successfully' });
+  } catch (err) {
+    console.error('❌ Error mapping FCM token:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 
 // Helper function to fetch and broadcast current active users from Redis
 async function broadcastActiveUsers() {
@@ -290,19 +329,51 @@ socket.on("realRegisterUser", (firebaseUid) => {
   }
 
   // 1. Start Call
-  socket.on("start_call", ({ signal, to, name }) => {
-    console.log(`📞 Start call from ${socket.user.uid} to ${to}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit("incoming_call", {
-        signal,
-        from: socket.user.uid,
-        name,
-      });
-    } else {
-      console.warn(`❌ Target user ${to} not found in userSockets map!`);
+// server.js: Update your data block inside socket.on("start_call")
+socket.on("start_call", async ({ signal, to, name, roomId }) => { // 1. Add roomId here if passed from client
+  console.log(`📞 Start call from ${socket.user.uid} to ${to}`);
+  
+  const targetSocketId = userSockets.get(to);
+
+  if (targetSocketId) {
+    io.to(targetSocketId).emit("incoming_call", {
+      signal,
+      from: socket.user.uid,
+      name,
+      roomId // Pass it along via WebSockets
+    });
+  } else {
+    console.log(`⚠️ User ${to} offline via WebSockets. Dispatching background FCM push packet...`);
+    
+    try {
+      const recipientUser = await User.findOne({ uid: to });
+
+      if (recipientUser && recipientUser.fcmToken) {
+        const pushMessage = {
+          token: recipientUser.fcmToken,
+          android: {
+            priority: 'high'
+          },
+          data: {
+            // FIX HERE: Pass the actual room or session ID 
+            // so the call Accepted listener knows which WebRTC space to connect to
+            callId: roomId || socket.user.uid, 
+            callerName: name || "Incoming Call",
+            type: 'INCOMING_CALL'
+          }
+        };
+
+        await admin.messaging().send(pushMessage);
+        console.log(`✅ VoIP high-priority push successfully sent to Google servers for user ${to}`);
+      } else {
+        console.warn(`❌ Could not send push. No registered FCM token found for user ${to}`);
+      }
+    } catch (err) {
+      console.error('❌ Failed to route background FCM VoIP push:', err);
     }
-  });
+  }
+});
+
 
   // 2. Answer Call
   socket.on("answer_call", ({ signal, to }) => {

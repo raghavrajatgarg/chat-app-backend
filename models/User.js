@@ -5,7 +5,8 @@ const UserSchema = new mongoose.Schema({
   name: String,
   email: String,
   avatar: String,
-  lastSeen: { type: Date, default: Date.now }
+  lastSeen: { type: Date, default: Date.now },
+  fcmToken: { type: String, default: null }
 });
 
 module.exports = mongoose.models.User || mongoose.model('User', UserSchema);
