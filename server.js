@@ -15,36 +15,51 @@ const { encryptMessageContent, decryptMessageContent, serializeMessage } = requi
 const webpush = require('web-push');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
-const admin = require('firebase-admin');
+// server.js (Complete Top Section Update)
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getAuth: firebaseGetAuth } = require('firebase-admin/auth');
+
+let firebaseApp;
+let getAuth;
 
 try {
-  // 1. Read string from Render Environment Configs
+  // 1. Ingest string structure out of active variable context
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+    throw new Error("Missing FIREBASE_SERVICE_ACCOUNT environment variable.");
+  }
+  
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
   
-  // 2. Safety fix: Convert raw literal '\n' strings back into true native spacing flags
+  // 2. Safety escape block for formatting structures
   if (serviceAccount.private_key) {
     serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
   }
 
-  // 3. CLEAN FIX: Explicitly pass the credential engine inline
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
+  // 3. Initialize the application using the standalone framework engine
+  firebaseApp = initializeApp({
+    credential: cert(serviceAccount)
   });
+  
   console.log("✅ Firebase Admin successfully initialized via Render Environment Variables.");
+  
+  // 4. Map the getAuth proxy safely using the initialized instance reference
+  getAuth = () => firebaseGetAuth(firebaseApp);
+
 } catch (error) {
-  console.error("❌ Firebase parse error:", error);
+  console.error("❌ Firebase initialization crash:", error.message);
+  // Fallback map to prevent the rest of server.js syntax checking from crashing during load
+  getAuth = () => ({
+    verifyIdToken: () => { throw new Error("Firebase Admin failed to start."); }
+  });
 }
 
-// 4. Clean variable binding maps (so your middleware/sockets don't break)
-const authAdmin = admin.auth(); 
-const getAuth = () => authAdmin; 
-
-// Re-map the getAuth variable so your existing code doesn't break
+// Leave your Webpush configurations intact directly below:
 webpush.setVapidDetails(
   'mailto:your-email@example.com',
   process.env.VAPID_PUBLIC_KEY || "YOUR_GENERATED_PUBLIC_KEY_HERE",
   process.env.VAPID_PRIVATE_KEY || "YOUR_GENERATED_PRIVATE_KEY_HERE"
 );
+
 const crypto = require('crypto');
 
 const secureToken = crypto.randomBytes(32).toString('hex');
