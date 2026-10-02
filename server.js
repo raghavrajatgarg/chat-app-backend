@@ -18,6 +18,7 @@ const multer = require('multer');
 // server.js (Firebase setup section wrapper update)
 const { initializeApp, cert, getApps, getApp } = require('firebase-admin/app');
 const { getAuth: firebaseGetAuth } = require('firebase-admin/auth');
+const { getMessaging } = require('firebase-admin/messaging'); // Make sure this line is imported!
 
 let firebaseApp;
 let getAuth;
@@ -26,32 +27,18 @@ try {
   if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
     throw new Error("Missing FIREBASE_SERVICE_ACCOUNT environment variable.");
   }
-  
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  
   if (serviceAccount.private_key) {
     serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
   }
-
-  // SAFETY FIX: If the app is already initialized elsewhere (like firebaseAdmin.js), 
-  // reuse it instead of invoking initializeApp a second time!
   if (getApps().length === 0) {
-    firebaseApp = initializeApp({
-      credential: cert(serviceAccount)
-    });
-    console.log("✅ Firebase Admin successfully initialized via Render Environment Variables.");
+    firebaseApp = initializeApp({ credential: cert(serviceAccount) });
   } else {
     firebaseApp = getApp();
-    console.log("🔄 Reusing existing initialized Firebase Admin application instance.");
   }
-  
   getAuth = () => firebaseGetAuth(firebaseApp);
-
 } catch (error) {
   console.error("❌ Firebase initialization crash:", error.message);
-  getAuth = () => ({
-    verifyIdToken: () => { throw new Error("Firebase Admin failed to start."); }
-  });
 }
 
 
@@ -107,6 +94,43 @@ const upload = multer({
 });
 const PUBLIC_ROOMS = new Set(['general', 'tech', 'random', 'gaming']);
 
+// Keep SDP out of FCM and share pending offers across server instances.
+const PENDING_CALL_TTL_MS = 65000;
+const pendingCallKey = (calleeUid) => `pending_call:${calleeUid}`;
+
+async function setPendingCall(calleeUid, entry) {
+  if (!calleeUid) return;
+  await redisClient.set(
+    pendingCallKey(calleeUid),
+    JSON.stringify({ ...entry, at: Date.now() }),
+    { EX: Math.ceil(PENDING_CALL_TTL_MS / 1000) }
+  );
+}
+
+async function getPendingCall(calleeUid) {
+  if (!calleeUid) return null;
+  const serialized = await redisClient.get(pendingCallKey(calleeUid));
+  if (!serialized) return null;
+
+  let entry;
+  try {
+    entry = JSON.parse(serialized);
+  } catch {
+    await redisClient.del(pendingCallKey(calleeUid));
+    return null;
+  }
+
+  if (Date.now() - entry.at > PENDING_CALL_TTL_MS) {
+    await redisClient.del(pendingCallKey(calleeUid));
+    return null;
+  }
+  return entry;
+}
+
+async function clearPendingCall(calleeUid) {
+  if (calleeUid) await redisClient.del(pendingCallKey(calleeUid));
+}
+
 function canAccessRoom(room, uid) {
   if (!room || !uid) return false;
   return PUBLIC_ROOMS.has(room) || room.split('_').includes(uid);
@@ -139,7 +163,7 @@ io.use(async (socket, next) => {
   }
   try {
     const decodedToken = await getAuth().verifyIdToken(token);
-    socket.user = decodedToken; 
+    socket.user = decodedToken;
     next();
   } catch (err) {
     next(new Error("Authentication error: Invalid token"));
@@ -167,7 +191,7 @@ app.get('/api/messages/thread', checkAuth, async (req, res) => {
 app.get('/api/messages/search', checkAuth, async (req, res) => {
   try {
     const { room, query } = req.query;
-    
+
     if (!room || !query) {
       return res.status(400).json({ error: 'Room and query parameters are required' });
     }
@@ -221,7 +245,7 @@ app.get('/api/messages', checkAuth, async (req, res) => {
       return res.status(403).json({ error: 'You do not have access to this room' });
     }
     console.log(`[SERVER DEBUG] Parsed params -> room: ${room}, before: ${before}, limit: ${limit}`);
-    
+
     let query = { room };
 
     if (before) {
@@ -254,10 +278,15 @@ app.post('/api/users/save-fcm-token', checkAuth, async (req, res) => {
     const { token } = req.body;
     if (!token) return res.status(400).json({ error: 'Token is required' });
 
-    // req.user.uid comes directly from your checkAuth firebase middleware validation
+    const userFields = { fcmToken: token };
+    if (req.user.name) userFields.name = req.user.name;
+    if (req.user.email) userFields.email = req.user.email;
+    if (req.user.picture) userFields.avatar = req.user.picture;
+
     await User.findOneAndUpdate(
       { uid: req.user.uid },
-      { fcmToken: token }
+      { $set: userFields },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
     res.status(200).json({ success: true, message: 'FCM Token linked successfully' });
@@ -266,34 +295,6 @@ app.post('/api/users/save-fcm-token', checkAuth, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-// server.js: Add this temporary route right below your existing endpoints
-app.post('/api/test-voip-push', async (req, res) => {
-  const { token, callerName, roomId } = req.body;
-  console.log(`📡 Test endpoint hit! Dispatched token: ${token}`);
-
-  try {
-    const pushMessage = {
-      token: token,
-      android: {
-        priority: 'high' // MANDATORY: Forces the Android CPU to wake up from deep sleep
-      },
-      data: {
-        callId: roomId || "TEST_ROOM_123",
-        callerName: callerName || "Oppo System Tester",
-        type: 'INCOMING_CALL'
-      }
-    };
-
-    // Use the already initialized admin instance you fixed earlier
-    await admin.messaging().send(pushMessage);
-    console.log("✅ High-priority test call packet pushed to Google!");
-    return res.status(200).json({ success: true, message: "Push sent!" });
-  } catch (err) {
-    console.error("❌ Test push failed:", err);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
 
 // Helper function to fetch and broadcast current active users from Redis
 async function broadcastActiveUsers() {
@@ -348,7 +349,7 @@ io.on('connection', (socket) => {
         createdAt: new Date(),
         reactions: null
       });
-      
+
       const savedMessage = await newMessage.save();
 
       // Broadcast to everyone in the room (main feed or thread handles filtering client-side)
@@ -359,10 +360,10 @@ io.on('connection', (socket) => {
       console.error('❌ Error sending message:', error);
       if (typeof callback === 'function') callback({ success: false, error: error.message });
     }
-    
+
   });
-       // Store mapping of firebaseUid -> socket.id
-socket.on("realRegisterUser", (firebaseUid) => {
+  // Store mapping of firebaseUid -> socket.id
+  socket.on("realRegisterUser", (firebaseUid) => {
     if (firebaseUid) {
       userSockets.set(firebaseUid, socket.id);
       console.log(`✅ User successfully mapped: ${firebaseUid} -> ${socket.id}`);
@@ -370,29 +371,44 @@ socket.on("realRegisterUser", (firebaseUid) => {
   });
 
   // 2. Start Call
-// Automatically register the user using their authenticated Firebase token data
+  // Automatically register the user using their authenticated Firebase token data
   if (socket.user && socket.user.uid) {
     userSockets.set(socket.user.uid, socket.id);
+    // Personal room used for call signalling. Rooms are coordinated by the
+    // Redis adapter, so a call still reaches the callee when the two users
+    // are connected to different server instances.
+    socket.join(`user:${socket.user.uid}`);
     console.log(`✅ User automatically mapped: ${socket.user.uid} -> ${socket.id}`);
   }
 
   // 1. Start Call
-// server.js: Update your data block inside socket.on("start_call")
-socket.on("start_call", async ({ signal, to, name, roomId }) => { // 1. Add roomId here if passed from client
-  console.log(`📞 Start call from ${socket.user.uid} to ${to}`);
-  
-  const targetSocketId = userSockets.get(to);
+  // server.js: Update your data block inside socket.on("start_call")
+  socket.on("start_call", async ({ signal, to, name, roomId }) => {
+    console.log(`📞 Start call from ${socket.user.uid} to ${to}`);
 
-  if (targetSocketId) {
-    io.to(targetSocketId).emit("incoming_call", {
+    const callId = roomId || socket.user.uid;
+
+    // Remember the offer so the callee can pull it after answering (cold start
+    // / lock-screen accept). Cleared on answer, decline or hangup.
+    await setPendingCall(to, {
+      signal,
+      from: socket.user.uid,
+      name: name || "Incoming Call",
+      callId,
+    });
+
+    // Fan the ring out through the callee's personal room (works on every
+    // node via the Redis adapter).
+    io.to(`user:${to}`).emit("incoming_call", {
       signal,
       from: socket.user.uid,
       name,
-      roomId // Pass it along via WebSockets
+      roomId: callId
     });
-  } else {
-    console.log(`⚠️ User ${to} offline via WebSockets. Dispatching background FCM push packet...`);
-    
+
+    // Always mirror the ring over FCM as well. Without this, a callee whose app
+    // is backgrounded but still holds a live socket never receives a
+    // lock-screen / full-screen incoming call - only the in-app modal fires.
     try {
       const recipientUser = await User.findOne({ uid: to });
 
@@ -400,52 +416,71 @@ socket.on("start_call", async ({ signal, to, name, roomId }) => { // 1. Add room
         const pushMessage = {
           token: recipientUser.fcmToken,
           android: {
-            priority: 'high'
+            priority: "high" // Wakes up the device CPU
           },
           data: {
-            // FIX HERE: Pass the actual room or session ID 
-            // so the call Accepted listener knows which WebRTC space to connect to
-            callId: roomId || socket.user.uid, 
+            isVoip: "true", // Checked by the Java background listener
+            roomId: callId,
             callerName: name || "Incoming Call",
-            type: 'INCOMING_CALL'
+            fromUid: socket.user.uid,
+            hasSignal: "true" // SDP is pulled over the socket to stay under FCM's 4 KB cap
           }
         };
 
-        await admin.messaging().send(pushMessage);
+        await getMessaging(firebaseApp).send(pushMessage);
         console.log(`✅ VoIP high-priority push successfully sent to Google servers for user ${to}`);
       } else {
         console.warn(`❌ Could not send push. No registered FCM token found for user ${to}`);
       }
     } catch (err) {
-      console.error('❌ Failed to route background FCM VoIP push:', err);
+      console.error("❌ Failed to route background FCM VoIP push:", err);
     }
-  }
-});
+  });
 
 
   // 2. Answer Call
-  socket.on("answer_call", ({ signal, to }) => {
+  socket.on("answer_call", async ({ signal, to }) => {
     console.log(`✅ Answer call to ${to}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit("call_accepted", signal);
-    }
+    await clearPendingCall(socket.user.uid);
+    io.to(`user:${to}`).emit("call_accepted", signal);
   });
 
   // 3. ICE Candidates
   socket.on("ice_candidate", ({ target, to }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit("ice_candidate", target);
+    io.to(`user:${to}`).emit("ice_candidate", target);
+  });
+
+  // 4b. Callee pulls the stored offer after answering from a cold start /
+  //     lock screen (the offer was intentionally not shipped in the FCM push).
+  socket.on("request_pending_call", async (payload, callback) => {
+    const ack = typeof callback === "function" ? callback : () => {};
+    try {
+      const entry = await getPendingCall(socket.user.uid);
+      if (!entry) {
+        ack({ call: null });
+        return;
+      }
+      ack({
+        call: {
+          signal: entry.signal,
+          from: entry.from,
+          name: entry.name,
+          roomId: entry.callId,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to retrieve pending call offer:", error);
+      ack({ call: null });
     }
   });
 
   // 4. Hangup Call
-  socket.on("hangup_call", ({ to }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit("call_ended");
-    }
+  socket.on("hangup_call", async ({ to }) => {
+    await Promise.all([
+      clearPendingCall(to),
+      clearPendingCall(socket.user.uid),
+    ]);
+    io.to(`user:${to}`).emit("call_ended");
   });
 
   socket.on("disconnect", () => {
@@ -455,71 +490,71 @@ socket.on("start_call", async ({ signal, to, name, roomId }) => { // 1. Add room
         break;
       }
     }
-});// 📁 File path: server.js (Around line 250)
-socket.on('mark_messages_read', async ({ messageIds, room }) => {
-  try {
-    if (!canAccessRoom(room, socket.user.uid)) return;
+  });// 📁 File path: server.js (Around line 250)
+  socket.on('mark_messages_read', async ({ messageIds, room }) => {
+    try {
+      if (!canAccessRoom(room, socket.user.uid)) return;
 
-    for (const messageId of messageIds) {
-      await Message.updateOne(
-        { 
-          _id: messageId, 
-          room,
-          // ⚡️ CRITICAL PROTECTION CONDITIONAL: Only target the message document 
-          // if this specific user has NEVER read it yet.
-          'readBy.userId': { $ne: socket.user.uid } 
-        },
-        { 
-          // ⚡️ THE PERMANENT DATABASE FIX: Using $addToSet instead of $push 
-          // guarantees MongoDB rejects duplicates from secondary browser tab connections!
-          $addToSet: { 
-            readBy: { 
-              userId: socket.user.uid, 
-              readAt: new Date() 
-            } 
-          } 
-        }
+      for (const messageId of messageIds) {
+        await Message.updateOne(
+          {
+            _id: messageId,
+            room,
+            // ⚡️ CRITICAL PROTECTION CONDITIONAL: Only target the message document 
+            // if this specific user has NEVER read it yet.
+            'readBy.userId': { $ne: socket.user.uid }
+          },
+          {
+            // ⚡️ THE PERMANENT DATABASE FIX: Using $addToSet instead of $push 
+            // guarantees MongoDB rejects duplicates from secondary browser tab connections!
+            $addToSet: {
+              readBy: {
+                userId: socket.user.uid,
+                readAt: new Date()
+              }
+            }
+          }
+        );
+      }
+
+      io.to(room).emit('messages_read_update', { messageIds, userId: socket.user.uid, room });
+    } catch (err) {
+      console.error("Error updating read receipts loop:", err);
+    }
+  });
+
+
+  // 📁 Inside server.js, update your event listener block:
+  socket.on('toggle_reaction', async ({ messageId, emoji }) => {
+    try {
+      const message = await Message.findById(messageId);
+      if (!message) return;
+      if (!canAccessRoom(message.room, socket.user.uid)) return;
+
+      // Type checking: Ensures data treats values as arrays securely
+      let reactions = Array.isArray(message.reactions) ? message.reactions : [];
+
+      const existingIndex = reactions.findIndex(
+        (r) => r.userId === socket.user.uid && r.emoji === emoji
       );
+
+      if (existingIndex > -1) {
+        // Remove reaction if the user clicks the same emoji again
+        reactions.splice(existingIndex, 1);
+      } else {
+        // Add new reaction array entry tracking elements
+        reactions.push({ emoji, userId: socket.user.uid });
+      }
+
+      message.reactions = reactions;
+      await message.save();
+
+      // Broadcasts updated schema tray straight out to everyone in the room loop
+      io.to(message.room).emit('message_updated', serializeMessage(message));
+    } catch (err) {
+      console.error('Error toggling reaction:', err);
     }
-
-    io.to(room).emit('messages_read_update', { messageIds, userId: socket.user.uid, room });
-  } catch (err) {
-    console.error("Error updating read receipts loop:", err);
-  }
-});
-
-
-// 📁 Inside server.js, update your event listener block:
-socket.on('toggle_reaction', async ({ messageId, emoji }) => {
-  try {
-    const message = await Message.findById(messageId);
-    if (!message) return;
-    if (!canAccessRoom(message.room, socket.user.uid)) return;
-
-    // Type checking: Ensures data treats values as arrays securely
-    let reactions = Array.isArray(message.reactions) ? message.reactions : [];
-
-    const existingIndex = reactions.findIndex(
-      (r) => r.userId === socket.user.uid && r.emoji === emoji
-    );
-
-    if (existingIndex > -1) {
-      // Remove reaction if the user clicks the same emoji again
-      reactions.splice(existingIndex, 1);
-    } else {
-      // Add new reaction array entry tracking elements
-      reactions.push({ emoji, userId: socket.user.uid });
-    }
-
-    message.reactions = reactions;
-    await message.save();
-
-    // Broadcasts updated schema tray straight out to everyone in the room loop
-    io.to(message.room).emit('message_updated', serializeMessage(message));
-  } catch (err) {
-    console.error('Error toggling reaction:', err);
-  }
-});
+  });
 
 
   socket.on('user_connected', async (userData) => {
@@ -529,7 +564,7 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
       const email = socket.user.email || null;
       const avatar = socket.user.picture || null;
       console.log(`📡 Registration Sync for ${name}:`, userData.pushSubscription ? "✅ TOKEN FOUND" : "❌ NO TOKEN ATTACHED");
-      
+
       try {
         await User.findOneAndUpdate(
           { uid },
@@ -544,19 +579,19 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
         uid,
         name,
         avatar,
-        pushSubscription: userData.pushSubscription || null 
+        pushSubscription: userData.pushSubscription || null
       };
 
-      socket.currentRoom = 'general'; 
+      socket.currentRoom = 'general';
       socket.join('general');
       // Stay subscribed to every public room (not just the active one) so
       // unread counts can be tracked client-side for rooms you're not viewing.
       PUBLIC_ROOMS.forEach((publicRoom) => socket.join(publicRoom));
 
       // Store active user session in Redis Hash
-      await redisClient.hSet('active_users', socket.id, JSON.stringify({ 
-        ...socket.userProfile, 
-        room: socket.currentRoom 
+      await redisClient.hSet('active_users', socket.id, JSON.stringify({
+        ...socket.userProfile,
+        room: socket.currentRoom
       }));
 
       await broadcastActiveUsers();
@@ -635,7 +670,7 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
       message.image = null;
       message.audio = null;
       message.contentCiphertext = encryptMessageContent(content);
-      message.edited = true; 
+      message.edited = true;
       await message.save();
 
       io.to(message.room).emit('message_updated', serializeMessage(message));
@@ -655,7 +690,7 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
     }
     socket.join(room);
     socket.currentRoom = room;
-    
+
     // Update room placement in Redis active users hash
     const existingDataStr = await redisClient.hGet('active_users', socket.id);
     if (existingDataStr) {
@@ -663,7 +698,7 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
       user.room = room;
       await redisClient.hSet('active_users', socket.id, JSON.stringify(user));
     }
-    
+
     await broadcastActiveUsers();
   });
 
@@ -671,7 +706,7 @@ socket.on('toggle_reaction', async ({ messageId, emoji }) => {
     socket.to(room).emit('display_typing', { userName, room });
   });
 
- socket.on('typing_stop', ({ room }) => {
+  socket.on('typing_stop', ({ room }) => {
     socket.to(room).emit('hide_typing', { room });
   });
 
@@ -687,7 +722,7 @@ const PORT = process.env.PORT || 5000;
 
 async function startServer() {
   try {
-      await Promise.all([
+    await Promise.all([
       redisClient.connect(),
       subClient.connect(),
       mongoose.connect(MONGO_URI)

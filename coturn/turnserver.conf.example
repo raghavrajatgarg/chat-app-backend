@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# coTURN reference config for a self-hosted, free-forever TURN server.
+# Copy to /etc/turnserver.conf on your Ubuntu/Debian VPS and edit the values
+# marked CHANGE-ME.  Then:  systemctl restart coturn
+#
+# Works on Oracle Cloud "Always Free" / any small VPS. See the setup guide.
+# ---------------------------------------------------------------------------
+
+# ---- Ports ---------------------------------------------------------------
+listening-port=3478          # UDP/TCP TURN + STUN
+tls-listening-port=5349      # TURNS (TLS) - survives strict firewalls
+min-port=49152               # relay port range; open this range too
+max-port=65535
+
+# ---- NAT / public IP -----------------------------------------------------
+# On a VPS with a 1:1 public IP (Oracle, AWS, Hetzner, DigitalOcean) put:
+#   external-ip=<PUBLIC_IP>/<PRIVATE_IP>
+# On a plain VPS where the interface already has the public IP, just:
+#   external-ip=<PUBLIC_IP>
+external-ip=203.0.113.10/10.0.0.2          # CHANGE-ME
+
+# ---- Auth: simple static user (matches the app's VITE_TURN_* env vars) ----
+lt-cred-mech
+user=myuser:mystrongpassword               # CHANGE-ME
+realm=turn.example.com                     # CHANGE-ME (your domain or public IP)
+fingerprint
+
+# ---- Hardening / hygiene -------------------------------------------------
+total-quota=100
+stale-nonce=600
+no-multicast-peers
+no-loopback-peers
+no-cli
+# Disable when not debugging so you don't log client IPs:
+log-file=/var/log/turnserver.log
+simple-log
+
+# ---- TLS (optional but recommended: enables turns:) ----------------------
+# Get certs with: certbot certonly --standalone -d turn.example.com
+cert=/etc/letsencrypt/live/turn.example.com/fullchain.pem
+pkey=/etc/letsencrypt/live/turn.example.com/privkey.pem
+cipher-list="ECDHE+AESGCM:ECDHE+CHACHA20"
+no-sslv3
+no-tlsv1
+no-tlsv1_1
