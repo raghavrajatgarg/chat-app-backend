@@ -337,6 +337,7 @@ io.on('connection', (socket) => {
           text: data.text || '',
           image: data.image || null,
           audio: data.audio || null,
+          attachment: data.attachment || null,
         }),
         sender: socket.user.name || socket.user.email || 'User',
         senderUid: socket.user.uid,

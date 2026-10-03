@@ -54,7 +54,7 @@ function serializeMessage(msg) {
   if (!msgObj) return null;
 
   // 2. Setup fallbacks for decryption fields
-  let decryptedContent = { text: '', image: null, audio: null };
+  let decryptedContent = { text: '', image: null, audio: null, attachment: null };
   try {
     if (msgObj.contentCiphertext) {
       // Ensure decryptMessageContent is imported and available in this file context
@@ -63,7 +63,8 @@ function serializeMessage(msg) {
       decryptedContent = { 
         text: msgObj.text || '', 
         image: msgObj.image || null, 
-        audio: msgObj.audio || null 
+        audio: msgObj.audio || null,
+        attachment: null,
       };
     }
   } catch (err) {
@@ -94,6 +95,7 @@ return {
   text: decryptedContent.text,
   image: decryptedContent.image,
   audio: decryptedContent.audio,
+  attachment: decryptedContent.attachment || null,
   reactions: groupedReactions,
   readBy: Array.isArray(msgObj.readBy) ? msgObj.readBy.map(r => ({
     uid: r.userId,
